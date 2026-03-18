@@ -1,4 +1,4 @@
-import React, { useState, useLayoutEffect } from "react";
+import React, { useState, useLayoutEffect, useEffect, useRef, useCallback } from "react";
 import {
   StyleSheet,
   View,
@@ -11,6 +11,7 @@ import {
   ZoomableList,
   ZoomablePdfPage,
 } from "rn-pdf-king";
+import { usePdfActions } from "../db";
 
 const GripHorizontal = ({ size = 20, color = "#666" }) => {
   const dotSize = size / 6;
@@ -35,6 +36,13 @@ export default function ViewerPage() {
   const router = useRouter();
   const { loading, pageCount, filePath, fileName } = usePdfDocument();
   const [isSelecting, setIsSelecting] = useState(false);
+  
+  const { getPdfFileByPath, addPdfFile, updateLastOpened, updatePageNumberOnly } = usePdfActions();
+  const [dbLoaded, setDbLoaded] = useState(false);
+  const [initialPage, setInitialPage] = useState(1);
+  const [pdfId, setPdfId] = useState<string | null>(null);
+  
+  const currentPageRef = useRef(1);
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -44,11 +52,53 @@ export default function ViewerPage() {
   }, [navigation, fileName]);
 
   // If no file is loaded, go back to picker
-  React.useEffect(() => {
+  useEffect(() => {
     if (!loading && !filePath) {
       router.replace("/");
     }
   }, [loading, filePath]);
+
+  // Reset DB state when loading new file
+  useEffect(() => {
+    if (loading) {
+      setDbLoaded(false);
+      setPdfId(null);
+    }
+  }, [loading]);
+
+  useEffect(() => {
+    if (filePath && fileName && !loading) { // Remove !dbLoaded check, rely on deps
+      let active = true;
+      (async () => {
+        try {
+          const file = await getPdfFileByPath(filePath);
+          let id = file?.id;
+          let page = file?.lastVisitedPageNo || 1;
+
+          if (file) {
+            await updateLastOpened(file.id);
+            id = file.id;
+          } else {
+            id = await addPdfFile(fileName, filePath);
+          }
+          
+          if (active && id) {
+            setPdfId(id);
+            setInitialPage(page);
+            currentPageRef.current = page;
+            setDbLoaded(true);
+          }
+        } catch (error) {
+          console.error("Error initializing PDF in DB:", error);
+          if (active) {
+            setInitialPage(1);
+            setDbLoaded(true);
+          }
+        }
+      })();
+      return () => { active = false; };
+    }
+  }, [filePath, fileName, loading, getPdfFileByPath, addPdfFile, updateLastOpened]);
 
   const renderItem = ({ item, width }: { item: number; width: number }) => {
     const itemHeight = width * 1.414;
@@ -74,7 +124,7 @@ export default function ViewerPage() {
     );
   };
 
-  if (loading) {
+  if (loading || !dbLoaded || !pdfId) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color="#007AFF" />
@@ -93,7 +143,16 @@ export default function ViewerPage() {
           pageSliderEnabled
           pageSliderLabel={(current, total) => `${current}/${total}`}
           pageSliderLogo={<GripHorizontal size={20} color="#666" />}
-          onScrollPageNumberChanged={(page) => console.log(`Current Page: ${page}`)}
+          onScrollPageNumberChanged={(page) => {
+            currentPageRef.current = page;
+          }}
+          onMomentumScrollEnd={() => {
+            if (pdfId) {
+              updatePageNumberOnly(pdfId, currentPageRef.current);
+            }
+          }}
+          initialScrollIndex={initialPage - 1}
+          key={pdfId || 'loading'}
       />
     </View>
   );
