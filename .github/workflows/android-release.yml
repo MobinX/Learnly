@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   build-android:
+    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'RELEASE'
     runs-on: ubuntu-latest
 
     steps:
