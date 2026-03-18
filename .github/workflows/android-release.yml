@@ -20,8 +20,8 @@ jobs:
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
-          java-version: '17'
+          distribution: "temurin"
+          java-version: "17"
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -39,7 +39,7 @@ jobs:
 
       - name: Build Android Release
         working-directory: android
-        run: ./gradlew assembleRelease
+        run: NODE_ENV=production ./gradlew assembleRelease
 
       - name: List Build Outputs
         run: ls -R android/app/build/outputs/apk/release/
