@@ -9,10 +9,21 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import RnPdfKing, { usePdfDocument } from "rn-pdf-king";
+import { navigationTarget } from "../navigation_state";
 
 export default function IndexPage() {
   const router = useRouter();
   const { loading, filePath, pickFile, error } = usePdfDocument();
+
+  const handlePickFile = () => {
+      navigationTarget.current = '/viewer';
+      pickFile();
+  };
+
+  const handleTestFeatures = () => {
+      navigationTarget.current = '/viewer2';
+      pickFile();
+  };
 
   useEffect(() => {
     // Check initial intent on mount (Android only)
@@ -35,7 +46,9 @@ export default function IndexPage() {
       <View style={styles.card}>
         <Text style={styles.title}>PDF King</Text>
         <Text style={styles.subtitle}>Select a PDF to get started</Text>
-        <Button title="Pick PDF File" onPress={pickFile} color="#007AFF" />
+        <Button title="Pick PDF File" onPress={handlePickFile} color="#007AFF" />
+        <View style={{height: 10}} />
+        <Button title="Test Base64Bitmap and getTextChars" onPress={handleTestFeatures} color="#FF9500" />
         {error && <Text style={styles.error}>{error}</Text>}
       </View>
     </View>

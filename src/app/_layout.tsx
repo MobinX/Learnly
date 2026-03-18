@@ -2,6 +2,7 @@ import { Stack, router, usePathname } from 'expo-router';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { PdfDocumentProvider } from 'rn-pdf-king';
 import { useEffect } from 'react';
+import { navigationTarget } from '../navigation_state';
 
 export default function RootLayout() {
   const pathname = usePathname();
@@ -17,7 +18,7 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <PdfDocumentProvider
         onLoadSuccess={() => {
-          router.push("/viewer");
+          router.push(navigationTarget.current);
         }}
       >
         <Stack

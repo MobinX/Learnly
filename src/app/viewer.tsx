@@ -93,6 +93,7 @@ export default function ViewerPage() {
           pageSliderEnabled
           pageSliderLabel={(current, total) => `${current}/${total}`}
           pageSliderLogo={<GripHorizontal size={20} color="#666" />}
+          onScrollPageNumberChanged={(page) => console.log(`Current Page: ${page}`)}
       />
     </View>
   );
