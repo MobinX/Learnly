@@ -31,6 +31,16 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      - name: Cache Gradle Wrapper and Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('catch.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
       - name: Run Expo Prebuild
         run: bun x expo prebuild --platform android --clean
 
