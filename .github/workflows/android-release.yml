@@ -51,7 +51,7 @@ jobs:
             android-gradle-
 
       - name: Run Expo Prebuild
-        run: bun x expo prebuild --platform android --clean
+        run: bun x expo prebuild --platform android
 
       - name: Restore Android Gradle Cache
         run: |
@@ -63,6 +63,19 @@ jobs:
           else
             echo "No cache found at .gradle/android/.gradle"
           fi
+
+      - name: Setup Android Signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+        run: |
+          # Decode Keystore
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/release.keystore
+          
+          # Patch Gradle files
+          bun scripts/patch-android-signing.js
 
       - name: Grant Execute Permission for Gradlew
         run: chmod +x android/gradlew
