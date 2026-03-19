@@ -3,16 +3,17 @@ import {
   StyleSheet,
   View,
   Text,
-  ActivityIndicator,
   TouchableOpacity,
   SafeAreaView,
   StatusBar,
   Alert,
   Platform,
   Modal,
+  Pressable,
 } from "react-native";
+import { FAB, ActivityIndicator } from 'react-native-paper';
 import { useNavigation, useRouter } from "expo-router";
-import {
+import RnPdfKing, {
   usePdfDocument,
   ZoomableList,
   ZoomablePdfPage,
@@ -59,7 +60,14 @@ interface PageItemProps {
   activeSelectionPage: number | null;
   onSelectionChanged: (page: number, selection: any) => void;
   onPreDefinedHighlightClick: (event: any) => void;
+  isSelectionMode: boolean;
+  isSelected: boolean;
+  onToggleSelect: (page: number) => void;
 }
+
+type ViewerItemType = 
+  | { type: 'pdf'; pageNo: number }
+  | { type: 'custom'; text: string; id: string };
 
 const PageItem = React.memo(({ 
   item, 
@@ -67,7 +75,10 @@ const PageItem = React.memo(({
   highlights, 
   activeSelectionPage, 
   onSelectionChanged, 
-  onPreDefinedHighlightClick 
+  onPreDefinedHighlightClick,
+  isSelectionMode,
+  isSelected,
+  onToggleSelect
 }: PageItemProps) => {
   const itemHeight = width * 1.414;
   const pdfRef = useRef<PdfPageHandle>(null);
@@ -82,33 +93,52 @@ const PageItem = React.memo(({
       color: h.color,
     })), [highlights, item]);
 
-  // Clear selection if this page is not the active one (or selection cleared globally)
+  // Clear selection if this page is not the active one
   useEffect(() => {
-    if (activeSelectionPage !== item) {
+    if (activeSelectionPage !== null && activeSelectionPage !== item) {
       pdfRef.current?.clearSelectionState();
     }
   }, [activeSelectionPage, item]);
 
   return (
     <View style={[styles.pageWrapper, { width, height: itemHeight }]}>
-      <ZoomablePdfPage
-          ref={pdfRef}
-          pageNo={item}
-          width={width}
-          height={itemHeight}
-          preDefinedHighlights={pageHighlights}
-          handleColor="blue"
-          selectionColor="rgba(0, 0, 255, 0.3)"
-          onSelectionStarted={() => {}}
-          onSelectionEnded={() => {}}
-          onPreDefinedHighlightClick={onPreDefinedHighlightClick}
-          // Always enabled, we clear programmatically
-          selectionEnabled={true} 
-          // @ts-ignore: Assuming ZoomablePdfPage supports this event based on prompt
-          onSelectionChanged={(event) => {
-             onSelectionChanged(item, event.nativeEvent);
-          }}
-      />
+      <View style={{ flex: 1 }} pointerEvents={isSelectionMode ? "none" : "auto"}>
+        <ZoomablePdfPage
+            ref={pdfRef}
+            pageNo={item}
+            width={width}
+            height={itemHeight}
+            preDefinedHighlights={pageHighlights}
+            handleColor="blue"
+            selectionColor="rgba(0, 0, 255, 0.3)"
+            onSelectionStarted={() => {}}
+            onSelectionEnded={() => {}}
+            onPreDefinedHighlightClick={onPreDefinedHighlightClick}
+            // Always enabled, we clear programmatically
+            selectionEnabled={true} 
+            // @ts-ignore: Assuming ZoomablePdfPage supports this event based on prompt
+            onSelectionChanged={(event) => {
+               onSelectionChanged(item, event.nativeEvent);
+            }}
+        />
+      </View>
+      {isSelectionMode && (
+        <Pressable 
+          style={[
+            StyleSheet.absoluteFill,
+            isSelected && { backgroundColor: 'rgba(0, 0, 0, 0.2)' }
+          ]} 
+          onPress={() => onToggleSelect(item)}
+        >
+          <View style={styles.checkboxContainer}>
+            <Ionicons 
+              name={isSelected ? "checkbox" : "square-outline"} 
+              size={24} 
+              color={isSelected ? "#007AFF" : "#666"} 
+            />
+          </View>
+        </Pressable>
+      )}
       <Text style={styles.pageLabel}>Page {item}</Text>
     </View>
   );
@@ -117,13 +147,16 @@ const PageItem = React.memo(({
 export default function ViewerPage() {
   const navigation = useNavigation();
   const router = useRouter();
-  const { loading, pageCount, filePath, fileName } = usePdfDocument();
+  const { loading, pageCount, filePath, fileName, clearAllSelections } = usePdfDocument();
   
   const { getPdfFileByPath, addPdfFile, updateLastOpened, updatePageNumberOnly } = usePdfActions();
   const [dbLoaded, setDbLoaded] = useState(false);
   const [initialPage, setInitialPage] = useState(1);
   const [pdfId, setPdfId] = useState<string | null>(null);
   
+  // Custom Data Source
+  const [viewerData, setViewerData] = useState<ViewerItemType[]>([]);
+
   const currentPageRef = useRef(1);
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -134,6 +167,10 @@ export default function ViewerPage() {
     start: number;
     end: number;
   } | null>(null);
+
+  // Page Selection Mode State
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedPages, setSelectedPages] = useState<number[]>([]);
 
   const [highlightColor, setHighlightColor] = useState('rgba(0, 0, 255, 0.3)'); // Default to blue
   const [showColorPicker, setShowColorPicker] = useState(false);
@@ -183,6 +220,17 @@ export default function ViewerPage() {
       if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
     };
   }, [showHeader]);
+
+  // Initialize Viewer Data from PageCount
+  useEffect(() => {
+    if (pageCount > 0 && viewerData.length === 0) {
+      const initialData: ViewerItemType[] = Array.from({ length: pageCount }, (_, i) => ({
+        type: 'pdf',
+        pageNo: i + 1
+      }));
+      setViewerData(initialData);
+    }
+  }, [pageCount]);
 
   // Watch selection changes
   useEffect(() => {
@@ -246,7 +294,8 @@ export default function ViewerPage() {
 
   const clearSelection = useCallback(() => {
     setSelection(null);
-  }, []);
+    clearAllSelections?.();
+  }, [clearAllSelections]);
 
   const handleCopy = async () => {
     if (selection) {
@@ -301,6 +350,16 @@ export default function ViewerPage() {
     );
   }, [deleteHighlight]);
 
+  const togglePageSelection = useCallback((page: number) => {
+    setSelectedPages(prev => {
+      if (prev.includes(page)) {
+        return prev.filter(p => p !== page);
+      } else {
+        return [...prev, page];
+      }
+    });
+  }, []);
+
   const headerStyle = useAnimatedStyle(() => ({
     opacity: headerOpacity.value,
     transform: [{ translateY: withTiming(headerOpacity.value === 0 ? -headerHeight : 0) }]
@@ -310,7 +369,18 @@ export default function ViewerPage() {
     return (
       <Animated.View style={[styles.header, headerStyle, { height: headerHeight, paddingTop: insets.top }]}>
           <View style={styles.headerContent}>
-            {selection ? (
+            {isSelectionMode ? (
+              <View style={styles.selectionHeader}>
+                <TouchableOpacity onPress={() => {
+                  setIsSelectionMode(false);
+                  setSelectedPages([]);
+                }} style={styles.iconButton}>
+                  <Ionicons name="close" size={24} color="#333" />
+                </TouchableOpacity>
+                <Text style={styles.title}>{selectedPages.length} Selected</Text>
+                <View style={{ width: 40 }} />
+              </View>
+            ) : selection ? (
               <View style={styles.selectionHeader}>
                 <TouchableOpacity onPress={clearSelection} style={styles.iconButton}>
                   <Ionicons name="close" size={24} color="#333" />
@@ -342,10 +412,19 @@ export default function ViewerPage() {
     );
   };
 
-  const renderItem = useCallback(({ item, width }: { item: number; width: number }) => {
+  const renderItem = useCallback(({ item, width }: { item: ViewerItemType; width: number }) => {
+    if (item.type === 'custom') {
+      return (
+        <View style={[styles.pageWrapper, { width, minHeight: width, padding: 20 }]}>
+          <Text style={{ fontSize: 16, lineHeight: 24 }}>{item.text}</Text>
+          <Text style={styles.pageLabel}>Custom Page</Text>
+        </View>
+      );
+    }
+
     return (
       <PageItem 
-        item={item} 
+        item={item.pageNo} 
         width={width} 
         highlights={highlights} 
         activeSelectionPage={selection?.pageNo ?? null}
@@ -366,9 +445,61 @@ export default function ViewerPage() {
            }
         }}
         onPreDefinedHighlightClick={handleHighlightClick}
+        isSelectionMode={isSelectionMode}
+        isSelected={selectedPages.includes(item.pageNo)}
+        onToggleSelect={togglePageSelection}
       />
     );
-  }, [highlights, selection, handleHighlightClick]);
+  }, [highlights, selection, handleHighlightClick, isSelectionMode, selectedPages, togglePageSelection]);
+
+  const handleExecute = async () => {
+    if (selectedPages.length === 0) return;
+
+    // Sort selected pages to find the first one
+    const sortedPages = [...selectedPages].sort((a, b) => a - b);
+    const firstPage = sortedPages[0];
+
+    try {
+      // Fetch text for all selected pages
+      const texts = await Promise.all(
+        sortedPages.map(page => RnPdfKing.getTextChars(page))
+      );
+      
+      const combinedText = texts.join('\n\n--- Page Break ---\n\n');
+      
+      // Create new custom page item
+      const newPage: ViewerItemType = {
+        type: 'custom',
+        text: combinedText,
+        id: `custom-${Date.now()}`
+      };
+
+      // Insert before the first selected page
+      setViewerData(prev => {
+        const newData = [...prev];
+        // Find index of the first PDF page that matches our sorted firstPage
+        const insertIndex = newData.findIndex(
+          item => item.type === 'pdf' && item.pageNo === firstPage
+        );
+        
+        if (insertIndex !== -1) {
+          newData.splice(insertIndex, 0, newPage);
+        } else {
+          // Fallback, just add to beginning if not found for some reason
+           newData.unshift(newPage);
+        }
+        return newData;
+      });
+
+      // Reset selection mode
+      setIsSelectionMode(false);
+      setSelectedPages([]);
+
+    } catch (error) {
+      console.error("Error executing page extraction:", error);
+      Alert.alert("Error", "Failed to extract text from selected pages.");
+    }
+  };
 
   if (loading || !dbLoaded || !pdfId) {
     return (
@@ -387,6 +518,8 @@ export default function ViewerPage() {
   }
 
   // Ensure initialPage is valid
+  // Note: with custom pages, initialPage logic might need adjustment if we wanted to deep link to a specific item index
+  // But for now keeping it simple based on PDF page count
   const validInitialIndex = Math.max(0, Math.min(initialPage, pageCount) - 1);
 
   const onSelectColor = ({ hex }: { hex: string }) => {
@@ -439,24 +572,36 @@ export default function ViewerPage() {
       {renderColorPickerModal()}
       
       <ZoomableList
-          data={Array.from({ length: pageCount }, (_, i) => i + 1)}
+          data={viewerData}
           renderItem={renderItem}
           estimatedItemSize={500}
-          keyExtractor={(item) => item.toString()}
+          keyExtractor={(item: ViewerItemType, index: number) => {
+             if (item.type === 'pdf') return `pdf-${item.pageNo}`;
+             return item.id;
+          }}
           scrollEnabled={!selection} // Disable scroll when selecting? User didn't specify but usually good.
           pageSliderEnabled
           pageSliderLabel={(current, total) => `${current}/${total}`}
           pageSliderLogo={<GripHorizontal size={20} color="#666" />}
-          onScrollPageNumberChanged={(page) => {
-            if (page < currentPageRef.current) {
+          onScrollPageNumberChanged={(pageIndex) => {
+            // pageIndex is 1-based index from the list
+            // We need to map it to the actual PDF page number if possible
+            const item = viewerData[pageIndex - 1];
+            
+            if (pageIndex < currentPageRef.current) {
               showHeader();
             }
-            currentPageRef.current = page;
-            setCurrentPage(page);
+            
+            // Only update DB if it's a PDF page
+            if (item && item.type === 'pdf') {
+               currentPageRef.current = item.pageNo;
+               setCurrentPage(item.pageNo);
+            }
           }}
           onMomentumScrollEnd={() => {
-            if (pdfId) {
-              updatePageNumberOnly(pdfId, currentPageRef.current);
+            if (pdfId && viewerData.length > 0) {
+               // We use the last known PDF page
+               updatePageNumberOnly(pdfId, currentPageRef.current);
             }
           }}
           initialScrollIndex={validInitialIndex}
@@ -464,6 +609,19 @@ export default function ViewerPage() {
           onTouchStart={() => {
             if (!selection) showHeader();
           }}
+      />
+      <FAB
+        icon={isSelectionMode ? "check" : "check-circle-outline"}
+        label={isSelectionMode ? "Execute" : "Select Page"}
+        style={styles.fab}
+        onPress={() => {
+          if (isSelectionMode) {
+            handleExecute();
+          } else {
+            setIsSelectionMode(true);
+          }
+        }}
+        visible={!isSelectionMode || (isSelectionMode && selectedPages.length > 0)}
       />
     </View>
   );
@@ -473,6 +631,21 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#f0f0f0",
+  },
+  fab: {
+    position: 'absolute',
+    margin: 16,
+    right: 0,
+    bottom: 0,
+    zIndex: 1000,
+  },
+  checkboxContainer: {
+    position: 'absolute',
+    top: 10,
+    left: 10,
+    zIndex: 10,
+    backgroundColor: 'rgba(255,255,255,0.8)',
+    borderRadius: 4,
   },
   header: {
     position: 'absolute',
