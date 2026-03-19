@@ -16,6 +16,7 @@ import {
   usePdfDocument,
   ZoomableList,
   ZoomablePdfPage,
+  PdfPageHandle,
 } from "rn-pdf-king";
 import { usePdfActions, useHighlights } from "../db";
 import Animated, { 
@@ -51,6 +52,68 @@ const GripHorizontal = ({ size = 20, color = "#666" }) => {
   );
 };
 
+interface PageItemProps {
+  item: number;
+  width: number;
+  highlights: any[];
+  activeSelectionPage: number | null;
+  onSelectionChanged: (page: number, selection: any) => void;
+  onPreDefinedHighlightClick: (event: any) => void;
+}
+
+const PageItem = React.memo(({ 
+  item, 
+  width, 
+  highlights, 
+  activeSelectionPage, 
+  onSelectionChanged, 
+  onPreDefinedHighlightClick 
+}: PageItemProps) => {
+  const itemHeight = width * 1.414;
+  const pdfRef = useRef<PdfPageHandle>(null);
+
+  // Filter highlights for this page
+  const pageHighlights = React.useMemo(() => highlights
+    .filter(h => h.pageNo === item)
+    .map(h => ({
+      id: h.id,
+      startIndex: h.startIndex,
+      endIndex: h.endIndex,
+      color: h.color,
+    })), [highlights, item]);
+
+  // Clear selection if this page is not the active one (or selection cleared globally)
+  useEffect(() => {
+    if (activeSelectionPage !== item) {
+      pdfRef.current?.clearSelectionState();
+    }
+  }, [activeSelectionPage, item]);
+
+  return (
+    <View style={[styles.pageWrapper, { width, height: itemHeight }]}>
+      <ZoomablePdfPage
+          ref={pdfRef}
+          pageNo={item}
+          width={width}
+          height={itemHeight}
+          preDefinedHighlights={pageHighlights}
+          handleColor="blue"
+          selectionColor="rgba(0, 0, 255, 0.3)"
+          onSelectionStarted={() => {}}
+          onSelectionEnded={() => {}}
+          onPreDefinedHighlightClick={onPreDefinedHighlightClick}
+          // Always enabled, we clear programmatically
+          selectionEnabled={true} 
+          // @ts-ignore: Assuming ZoomablePdfPage supports this event based on prompt
+          onSelectionChanged={(event) => {
+             onSelectionChanged(item, event.nativeEvent);
+          }}
+      />
+      <Text style={styles.pageLabel}>Page {item}</Text>
+    </View>
+  );
+});
+
 export default function ViewerPage() {
   const navigation = useNavigation();
   const router = useRouter();
@@ -71,9 +134,6 @@ export default function ViewerPage() {
     start: number;
     end: number;
   } | null>(null);
-
-  // Used to clear selection by toggling selectionEnabled
-  const [isSelectionEnabled, setIsSelectionEnabled] = useState(true);
 
   const [highlightColor, setHighlightColor] = useState('rgba(0, 0, 255, 0.3)'); // Default to blue
   const [showColorPicker, setShowColorPicker] = useState(false);
@@ -186,11 +246,6 @@ export default function ViewerPage() {
 
   const clearSelection = useCallback(() => {
     setSelection(null);
-    setIsSelectionEnabled(false);
-    // Re-enable after a short delay to allow UI to update and native selection to clear
-    setTimeout(() => {
-      setIsSelectionEnabled(true);
-    }, 100);
   }, []);
 
   const handleCopy = async () => {
@@ -287,54 +342,33 @@ export default function ViewerPage() {
     );
   };
 
-  const renderItem = ({ item, width }: { item: number; width: number }) => {
-    const itemHeight = width * 1.414;
-    // Filter highlights for this page
-    const pageHighlights = highlights
-      .filter(h => h.pageNo === item)
-      .map(h => ({
-        id: h.id,
-        startIndex: h.startIndex,
-        endIndex: h.endIndex,
-        color: h.color,
-      }));
-
+  const renderItem = useCallback(({ item, width }: { item: number; width: number }) => {
     return (
-      <View style={[styles.pageWrapper, { width, height: itemHeight }]}>
-        <ZoomablePdfPage
-            pageNo={item}
-            width={width}
-            height={itemHeight}
-            preDefinedHighlights={pageHighlights}
-            handleColor="blue"
-            selectionColor="rgba(0, 0, 255, 0.3)"
-            onSelectionStarted={() => {
-              // Optional: Clear timer or just rely on onSelectionChanged
-            }}
-            onSelectionEnded={() => {
-               // Usually we want to keep selection until user dismisses or selects elsewhere
-            }}
-            onPreDefinedHighlightClick={handleHighlightClick}
-            selectionEnabled={isSelectionEnabled}
-            // @ts-ignore: Assuming ZoomablePdfPage supports this event based on prompt
-            onSelectionChanged={(event) => {
-              const { selectedText, selectionStart, selectionEnd } = event.nativeEvent;
-              if (selectedText) {
-                setSelection({
-                  text: selectedText,
-                  pageNo: item,
-                  start: selectionStart,
-                  end: selectionEnd
-                });
-              } else {
+      <PageItem 
+        item={item} 
+        width={width} 
+        highlights={highlights} 
+        activeSelectionPage={selection?.pageNo ?? null}
+        onSelectionChanged={(pageNo, nativeEvent) => {
+           const { selectedText, selectionStart, selectionEnd } = nativeEvent;
+           if (selectedText) {
+             setSelection({
+               text: selectedText,
+               pageNo: pageNo,
+               start: selectionStart,
+               end: selectionEnd
+             });
+           } else {
+             // If selection cleared via tap outside on native side
+             if (selection?.pageNo === pageNo) {
                 setSelection(null);
-              }
-            }}
-        />
-        <Text style={styles.pageLabel}>Page {item}</Text>
-      </View>
+             }
+           }
+        }}
+        onPreDefinedHighlightClick={handleHighlightClick}
+      />
     );
-  };
+  }, [highlights, selection, handleHighlightClick]);
 
   if (loading || !dbLoaded || !pdfId) {
     return (
@@ -414,9 +448,11 @@ export default function ViewerPage() {
           pageSliderLabel={(current, total) => `${current}/${total}`}
           pageSliderLogo={<GripHorizontal size={20} color="#666" />}
           onScrollPageNumberChanged={(page) => {
+            if (page < currentPageRef.current) {
+              showHeader();
+            }
             currentPageRef.current = page;
             setCurrentPage(page);
-            showHeader(); // Show header on page change
           }}
           onMomentumScrollEnd={() => {
             if (pdfId) {
