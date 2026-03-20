@@ -4,7 +4,6 @@ import {
   View,
   Text,
   TouchableOpacity,
-  SafeAreaView,
   StatusBar,
   Alert,
   Platform,
@@ -19,14 +18,15 @@ import RnPdfKing, {
   ZoomablePdfPage,
   PdfPageHandle,
 } from "rn-pdf-king";
-import { usePdfActions, useHighlights } from "../db";
+import { usePdfActions, useHighlights, useSummaries } from "../db";
+import { useGenerateSummary } from "../hooks/useGenerateSummary";
 import Animated, { 
   useSharedValue, 
   useAnimatedStyle, 
   withTiming, 
-  withDelay, 
   cancelAnimation,
-  runOnJS 
+  runOnJS,
+  withRepeat
 } from "react-native-reanimated";
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons, AntDesign } from '@expo/vector-icons';
@@ -65,9 +65,35 @@ interface PageItemProps {
   onToggleSelect: (page: number) => void;
 }
 
+const SkeletonLoader = () => {
+  const opacity = useSharedValue(0.3);
+  
+  useEffect(() => {
+    opacity.value = withRepeat(
+      withTiming(0.7, { duration: 1000 }),
+      -1,
+      true
+    );
+  }, [opacity]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    opacity: opacity.value
+  }));
+
+  return (
+    <View style={{ gap: 10, padding: 10 }}>
+      <Animated.View style={[{ height: 20, width: '80%', backgroundColor: '#eee', borderRadius: 4 }, animatedStyle]} />
+      <Animated.View style={[{ height: 20, width: '90%', backgroundColor: '#eee', borderRadius: 4 }, animatedStyle]} />
+      <Animated.View style={[{ height: 20, width: '95%', backgroundColor: '#eee', borderRadius: 4 }, animatedStyle]} />
+      <Animated.View style={[{ height: 20, width: '85%', backgroundColor: '#eee', borderRadius: 4 }, animatedStyle]} />
+      <Animated.View style={[{ height: 20, width: '60%', backgroundColor: '#eee', borderRadius: 4 }, animatedStyle]} />
+    </View>
+  );
+};
+
 type ViewerItemType = 
   | { type: 'pdf'; pageNo: number }
-  | { type: 'custom'; text: string; id: string };
+  | { type: 'custom'; text: string; id: string; isLoading?: boolean };
 
 const PageItem = React.memo(({ 
   item, 
@@ -144,6 +170,8 @@ const PageItem = React.memo(({
   );
 });
 
+PageItem.displayName = 'PageItem';
+
 export default function ViewerPage() {
   const navigation = useNavigation();
   const router = useRouter();
@@ -158,7 +186,6 @@ export default function ViewerPage() {
   const [viewerData, setViewerData] = useState<ViewerItemType[]>([]);
 
   const currentPageRef = useRef(1);
-  const [currentPage, setCurrentPage] = useState(1);
 
   // Selection state
   const [selection, setSelection] = useState<{
@@ -181,6 +208,8 @@ export default function ViewerPage() {
 
   // Database hooks
   const { highlights, addHighlight, deleteHighlight } = useHighlights(pdfId || "");
+  const { summaries, addOrUpdateSummary } = useSummaries(pdfId || "");
+  const { generateSummary } = useGenerateSummary();
   
   const insets = useSafeAreaInsets();
   const headerHeight = HEADER_HEIGHT + insets.top;
@@ -195,7 +224,7 @@ export default function ViewerPage() {
     cancelAnimation(headerOpacity);
     headerOpacity.value = withTiming(1, { duration: 300 });
     resetInactivityTimer();
-  }, [headerOpacity]);
+  }, [headerOpacity, resetInactivityTimer]);
 
   const hideHeader = useCallback(() => {
     cancelAnimation(headerOpacity);
@@ -230,7 +259,46 @@ export default function ViewerPage() {
       }));
       setViewerData(initialData);
     }
-  }, [pageCount]);
+  }, [pageCount, viewerData.length]);
+
+  // Merge summaries into viewerData
+  useEffect(() => {
+    if (summaries.length > 0) {
+      setViewerData(prev => {
+        // If we haven't initialized yet, don't do anything
+        if (prev.length === 0) return prev;
+
+        let newData = [...prev];
+        let hasChanges = false;
+        
+        summaries.forEach(summary => {
+          // Check if this summary is already in viewerData
+          const exists = newData.some(item => item.type === 'custom' && item.id === summary.id);
+          if (!exists) {
+             // Insert it
+             const pageNo = summary.summaryForPdfPageNo;
+             const insertIndex = newData.findIndex(item => item.type === 'pdf' && item.pageNo === pageNo);
+             const newItem: ViewerItemType = {
+               type: 'custom',
+               text: summary.summary,
+               id: summary.id,
+               isLoading: false
+             };
+             
+             if (insertIndex !== -1) {
+               newData.splice(insertIndex, 0, newItem);
+             } else {
+               // If page not found (maybe at end), append?
+               newData.push(newItem);
+             }
+             hasChanges = true;
+          }
+        });
+        
+        return hasChanges ? newData : prev;
+      });
+    }
+  }, [summaries, viewerData.length]);
 
   // Watch selection changes
   useEffect(() => {
@@ -247,7 +315,7 @@ export default function ViewerPage() {
     if (!loading && !filePath) {
       router.replace("/");
     }
-  }, [loading, filePath]);
+  }, [loading, filePath, router]);
 
   // Reset DB state when loading new file
   useEffect(() => {
@@ -277,7 +345,6 @@ export default function ViewerPage() {
             setPdfId(id);
             setInitialPage(page);
             currentPageRef.current = page;
-            setCurrentPage(page);
             setDbLoaded(true);
           }
         } catch (error) {
@@ -416,8 +483,12 @@ export default function ViewerPage() {
     if (item.type === 'custom') {
       return (
         <View style={[styles.pageWrapper, { width, minHeight: width, padding: 20 }]}>
-          <Text style={{ fontSize: 16, lineHeight: 24 }}>{item.text}</Text>
-          <Text style={styles.pageLabel}>Custom Page</Text>
+          {item.isLoading ? (
+            <SkeletonLoader />
+          ) : (
+            <Text style={{ fontSize: 16, lineHeight: 24 }}>{item.text}</Text>
+          )}
+          <Text style={styles.pageLabel}>Summary Page</Text>
         </View>
       );
     }
@@ -459,45 +530,72 @@ export default function ViewerPage() {
     const sortedPages = [...selectedPages].sort((a, b) => a - b);
     const firstPage = sortedPages[0];
 
-    try {
-      // Fetch text for all selected pages
-      const texts = await Promise.all(
-        sortedPages.map(page => RnPdfKing.getTextChars(page))
+    // Create new custom page item with loading state
+    const newPageId = `summary-${Date.now()}`;
+    const newPage: ViewerItemType = {
+      type: 'custom',
+      text: '',
+      id: newPageId,
+      isLoading: true
+    };
+
+    // Insert immediately to show loading
+    setViewerData(prev => {
+      const newData = [...prev];
+      const insertIndex = newData.findIndex(
+        item => item.type === 'pdf' && item.pageNo === firstPage
       );
       
-      const combinedText = texts.join('\n\n--- Page Break ---\n\n');
-      
-      // Create new custom page item
-      const newPage: ViewerItemType = {
-        type: 'custom',
-        text: combinedText,
-        id: `custom-${Date.now()}`
-      };
+      if (insertIndex !== -1) {
+        newData.splice(insertIndex, 0, newPage);
+      } else {
+         newData.unshift(newPage);
+      }
+      return newData;
+    });
 
-      // Insert before the first selected page
-      setViewerData(prev => {
-        const newData = [...prev];
-        // Find index of the first PDF page that matches our sorted firstPage
-        const insertIndex = newData.findIndex(
-          item => item.type === 'pdf' && item.pageNo === firstPage
-        );
-        
-        if (insertIndex !== -1) {
-          newData.splice(insertIndex, 0, newPage);
-        } else {
-          // Fallback, just add to beginning if not found for some reason
-           newData.unshift(newPage);
-        }
-        return newData;
+    // Reset selection mode
+    setIsSelectionMode(false);
+    setSelectedPages([]);
+
+    try {
+      // Fetch bitmaps for all selected pages
+      const bitmaps = await Promise.all(
+        sortedPages.map(page => RnPdfKing.getPageBitmapBase64(page))
+      );
+      
+      let finalSummary = "";
+      
+      // Generate summary with streaming
+      await generateSummary(bitmaps, (text) => {
+        finalSummary = text;
+        setViewerData(prev => prev.map(item => 
+          (item.type === 'custom' && item.id === newPageId) 
+            ? { ...item, text: text } 
+            : item
+        ));
       });
 
-      // Reset selection mode
-      setIsSelectionMode(false);
-      setSelectedPages([]);
+      // Final update to remove loading state
+      setViewerData(prev => prev.map(item => 
+          (item.type === 'custom' && item.id === newPageId) 
+            ? { ...item, text: finalSummary, isLoading: false } 
+            : item
+      ));
+
+      // Save to DB
+      if (pdfId) {
+        await addOrUpdateSummary(firstPage, finalSummary);
+      }
 
     } catch (error) {
       console.error("Error executing page extraction:", error);
-      Alert.alert("Error", "Failed to extract text from selected pages.");
+      Alert.alert("Error", "Failed to generate summary.");
+      
+      // Remove the failed page
+      setViewerData(prev => prev.filter(item => 
+        !(item.type === 'custom' && item.id === newPageId)
+      ));
     }
   };
 
@@ -595,7 +693,6 @@ export default function ViewerPage() {
             // Only update DB if it's a PDF page
             if (item && item.type === 'pdf') {
                currentPageRef.current = item.pageNo;
-               setCurrentPage(item.pageNo);
             }
           }}
           onMomentumScrollEnd={() => {
