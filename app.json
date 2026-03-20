@@ -9,6 +9,7 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon",
+      "googleServicesFile": "./GoogleService-Info.plist",
       "bundleIdentifier": "com.anonymous.Learnly"
     },
     "android": {
@@ -19,6 +20,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
+      "googleServicesFile": "./google-services.json",
       "package": "com.anonymous.Learnly",
       "intentFilters": [
         {
@@ -60,7 +62,9 @@
           }
         }
       ],
-      "expo-sqlite"
+      "expo-sqlite",
+      "@react-native-firebase/app",
+      "@react-native-firebase/auth"
     ],
     "experiments": {
       "typedRoutes": true,
