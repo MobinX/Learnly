@@ -10,7 +10,7 @@ import {
   Modal,
   Pressable,
 } from "react-native";
-import { FAB, ActivityIndicator } from 'react-native-paper';
+import { FAB, ActivityIndicator, Portal } from 'react-native-paper';
 import { useNavigation, useRouter } from "expo-router";
 import RnPdfKing, {
   usePdfDocument,
@@ -29,9 +29,10 @@ import Animated, {
   withRepeat
 } from "react-native-reanimated";
 import * as Clipboard from 'expo-clipboard';
-import { Ionicons, AntDesign } from '@expo/vector-icons';
+import { Ionicons, AntDesign, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ColorPicker, { Panel1, Swatches, Preview, OpacitySlider, HueSlider } from 'reanimated-color-picker';
+import { ChatOverlay } from "../components/ChatOverlay";
 
 const HEADER_HEIGHT = 60;
 
@@ -199,6 +200,10 @@ export default function ViewerPage() {
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedPages, setSelectedPages] = useState<number[]>([]);
 
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatInitialQuery, setChatInitialQuery] = useState('');
+  const [fabOpen, setFabOpen] = useState(false);
+
   const [highlightColor, setHighlightColor] = useState('rgba(0, 0, 255, 0.3)'); // Default to blue
   const [showColorPicker, setShowColorPicker] = useState(false);
 
@@ -330,7 +335,7 @@ export default function ViewerPage() {
       let active = true;
       (async () => {
         try {
-          const file = await getPdfFileByPath(filePath);
+          const file = await getPdfFileByPath(filePath, fileName);
           let id = file?.id;
           let page = file?.lastVisitedPageNo || 1;
 
@@ -455,6 +460,18 @@ export default function ViewerPage() {
                 <View style={styles.actionButtons}>
                   <TouchableOpacity onPress={handleCopy} style={styles.iconButton}>
                     <Ionicons name="copy-outline" size={24} color="#333" />
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    onPress={() => {
+                      if (selection) {
+                        setChatInitialQuery(`Tell me more about this text from page ${selection.pageNo}: "${selection.text}"`);
+                        setIsChatOpen(true);
+                        clearSelection();
+                      }
+                    }} 
+                    style={styles.iconButton}
+                  >
+                    <Ionicons name="chatbubble-ellipses-outline" size={24} color="#007AFF" />
                   </TouchableOpacity>
                   <TouchableOpacity onPress={() => setShowColorPicker(true)} style={styles.iconButton}>
                     <Ionicons name="color-palette-outline" size={24} color={highlightColor} />
@@ -707,18 +724,50 @@ export default function ViewerPage() {
             if (!selection) showHeader();
           }}
       />
-      <FAB
-        icon={isSelectionMode ? "check" : "check-circle-outline"}
-        label={isSelectionMode ? "Execute" : "Select Page"}
-        style={styles.fab}
-        onPress={() => {
-          if (isSelectionMode) {
-            handleExecute();
-          } else {
-            setIsSelectionMode(true);
-          }
-        }}
-        visible={!isSelectionMode || (isSelectionMode && selectedPages.length > 0)}
+      
+      {isSelectionMode ? (
+        <FAB
+          icon="check"
+          label={`Execute (${selectedPages.length})`}
+          style={styles.fab}
+          onPress={handleExecute}
+          visible={selectedPages.length > 0}
+        />
+      ) : (
+        <Portal>
+          <FAB.Group
+            open={fabOpen}
+            icon={fabOpen ? 'close' : 'plus'}
+            actions={[
+              {
+                icon: 'chat-outline',
+                label: 'Chat',
+                onPress: () => {
+                   setChatInitialQuery('');
+                   setIsChatOpen(true);
+                },
+              },
+              {
+                icon: 'file-document-outline',
+                label: 'Summarize',
+                onPress: () => setIsSelectionMode(true),
+              },
+            ]}
+            onStateChange={({ open }) => setFabOpen(open)}
+            visible={true}
+            fabStyle={{ backgroundColor: '#007AFF' }}
+            color="white"
+          />
+        </Portal>
+      )}
+
+      <ChatOverlay
+        isVisible={isChatOpen}
+        onClose={() => setIsChatOpen(false)}
+        pdfId={pdfId}
+        currentPage={currentPageRef.current}
+        pageCount={pageCount}
+        initialQuery={chatInitialQuery}
       />
     </View>
   );

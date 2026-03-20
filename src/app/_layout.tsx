@@ -4,6 +4,7 @@ import { PdfDocumentProvider } from 'rn-pdf-king';
 import { useEffect } from 'react';
 import { navigationTarget } from '../navigation_state';
 import { DatabaseProvider } from '../db';
+import { PaperProvider } from 'react-native-paper';
 
 export default function RootLayout() {
   const pathname = usePathname();
@@ -17,21 +18,23 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <DatabaseProvider>
-        <PdfDocumentProvider
-          onLoadSuccess={() => {
-            router.push(navigationTarget.current);
-          }}
-        >
-          <Stack
-            screenOptions={{
-              headerStyle: { backgroundColor: '#fff' },
-              headerTintColor: '#333',
-              headerTitleStyle: { fontWeight: 'bold' },
+      <PaperProvider>
+        <DatabaseProvider>
+          <PdfDocumentProvider
+            onLoadSuccess={() => {
+              router.push(navigationTarget.current);
             }}
-          />
-        </PdfDocumentProvider>
-      </DatabaseProvider>
+          >
+            <Stack
+              screenOptions={{
+                headerStyle: { backgroundColor: '#fff' },
+                headerTintColor: '#333',
+                headerTitleStyle: { fontWeight: 'bold' },
+              }}
+            />
+          </PdfDocumentProvider>
+        </DatabaseProvider>
+      </PaperProvider>
     </GestureHandlerRootView>
   );
 }
