@@ -25,10 +25,7 @@
       "intentFilters": [
         {
           "action": "VIEW",
-          "category": [
-            "DEFAULT",
-            "BROWSABLE"
-          ],
+          "category": ["DEFAULT", "BROWSABLE"],
           "data": [
             {
               "scheme": "file",
@@ -71,11 +68,20 @@
       "typedRoutes": true,
       "reactCompiler": true
     },
+    "updates": {
+      "requestHeaders": {
+        "expo-channel-name": "preview"
+      },
+      "url": "https://u.expo.dev/70f407a6-faf5-4ab9-b30c-e3ed3bdaccd9"
+    },
     "extra": {
       "router": {},
       "eas": {
         "projectId": "70f407a6-faf5-4ab9-b30c-e3ed3bdaccd9"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
     }
   }
 }
