@@ -9,8 +9,9 @@ import {
   Platform,
   Modal,
   Pressable,
+  Linking,
 } from "react-native";
-import { FAB, ActivityIndicator } from 'react-native-paper';
+import { FAB, ActivityIndicator, Portal } from 'react-native-paper';
 import { useNavigation, useRouter } from "expo-router";
 import RnPdfKing, {
   usePdfDocument,
@@ -29,11 +30,32 @@ import Animated, {
   withRepeat
 } from "react-native-reanimated";
 import * as Clipboard from 'expo-clipboard';
-import { Ionicons, AntDesign } from '@expo/vector-icons';
+import { Ionicons, AntDesign, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ColorPicker, { Panel1, Swatches, Preview, OpacitySlider, HueSlider } from 'reanimated-color-picker';
+import { ChatOverlay } from "../components/ChatOverlay";
+import { EnrichedMarkdownText, type MarkdownStyle } from "react-native-enriched-markdown";
 
 const HEADER_HEIGHT = 60;
+const summaryMarkdownStyle: MarkdownStyle = {
+  paragraph: { fontSize: 16, lineHeight: 24, color: "#1C1C1E", marginBottom: 12 },
+  h1: { fontSize: 26, lineHeight: 34, fontWeight: "700", color: "#111827", marginBottom: 12 },
+  h2: { fontSize: 22, lineHeight: 30, fontWeight: "700", color: "#111827", marginBottom: 10 },
+  h3: { fontSize: 19, lineHeight: 27, fontWeight: "600", color: "#111827", marginBottom: 8 },
+  list: { fontSize: 16, lineHeight: 24, color: "#1C1C1E", marginBottom: 8 },
+  codeBlock: { fontSize: 14, lineHeight: 20, backgroundColor: "#F3F4F6", borderRadius: 8, padding: 10 },
+  code: { fontSize: 14, color: "#111827", backgroundColor: "#EEF2FF", borderColor: "#E5E7EB" },
+  link: { color: "#007AFF", underline: true },
+  blockquote: { color: "#374151", borderColor: "#D1D5DB", borderWidth: 4, gapWidth: 12, backgroundColor: "#F9FAFB" },
+  table: {
+    fontSize: 14,
+    borderColor: "#E5E7EB",
+    borderRadius: 8,
+    headerBackgroundColor: "#F3F4F6",
+    cellPaddingHorizontal: 10,
+    cellPaddingVertical: 6,
+  },
+};
 
 const GripHorizontal = ({ size = 20, color = "#666" }) => {
   const dotSize = size / 6;
@@ -181,6 +203,7 @@ export default function ViewerPage() {
   const [dbLoaded, setDbLoaded] = useState(false);
   const [initialPage, setInitialPage] = useState(1);
   const [pdfId, setPdfId] = useState<string | null>(null);
+  const [firebaseReady, setFirebaseReady] = useState(false);
   
   // Custom Data Source
   const [viewerData, setViewerData] = useState<ViewerItemType[]>([]);
@@ -199,6 +222,10 @@ export default function ViewerPage() {
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedPages, setSelectedPages] = useState<number[]>([]);
 
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatInitialQuery, setChatInitialQuery] = useState('');
+  const [fabOpen, setFabOpen] = useState(false);
+
   const [highlightColor, setHighlightColor] = useState('rgba(0, 0, 255, 0.3)'); // Default to blue
   const [showColorPicker, setShowColorPicker] = useState(false);
 
@@ -207,6 +234,7 @@ export default function ViewerPage() {
   const inactivityTimer = useRef<NodeJS.Timeout | null>(null);
 
   // Database hooks
+  console.log('📄 Viewer: pdfId =', pdfId, 'fileName =', fileName);
   const { highlights, addHighlight, deleteHighlight } = useHighlights(pdfId || "");
   const { summaries, addOrUpdateSummary } = useSummaries(pdfId || "");
   const { generateSummary } = useGenerateSummary();
@@ -263,14 +291,14 @@ export default function ViewerPage() {
 
   // Merge summaries into viewerData
   useEffect(() => {
-    if (summaries.length > 0) {
+    if (summaries.length > 0 && firebaseReady) {
       setViewerData(prev => {
         // If we haven't initialized yet, don't do anything
         if (prev.length === 0) return prev;
 
         let newData = [...prev];
         let hasChanges = false;
-        
+
         summaries.forEach(summary => {
           // Check if this summary is already in viewerData
           const exists = newData.some(item => item.type === 'custom' && item.id === summary.id);
@@ -284,7 +312,7 @@ export default function ViewerPage() {
                id: summary.id,
                isLoading: false
              };
-             
+
              if (insertIndex !== -1) {
                newData.splice(insertIndex, 0, newItem);
              } else {
@@ -294,11 +322,11 @@ export default function ViewerPage() {
              hasChanges = true;
           }
         });
-        
+
         return hasChanges ? newData : prev;
       });
     }
-  }, [summaries, viewerData.length]);
+  }, [summaries, viewerData.length, firebaseReady]);
 
   // Watch selection changes
   useEffect(() => {
@@ -322,39 +350,66 @@ export default function ViewerPage() {
     if (loading) {
       setDbLoaded(false);
       setPdfId(null);
+      setFirebaseReady(false);
     }
   }, [loading]);
 
+  // Initialize PDF immediately, fetch DB data in background
   useEffect(() => {
-    if (filePath && fileName && !loading) {
+    if (filePath && fileName) {
       let active = true;
-      (async () => {
-        try {
-          const file = await getPdfFileByPath(filePath);
-          let id = file?.id;
-          let page = file?.lastVisitedPageNo || 1;
 
-          if (file) {
-            await updateLastOpened(file.id);
-            id = file.id;
-          } else {
-            id = await addPdfFile(fileName, filePath);
+      console.log('📁 Initializing PDF:', { filePath, fileName });
+
+      // Show PDF immediately at page 1
+      setInitialPage(1);
+      currentPageRef.current = 1;
+      setDbLoaded(true);
+
+      // Fetch DB data in background
+      if (!loading) {
+        (async () => {
+          try {
+            console.log('🔍 Searching for existing PDF:', { filePath, fileName });
+            const file = await getPdfFileByPath(filePath, fileName);
+            console.log('📄 Search result:', file ? `Found ID: ${file.id}` : 'Not found');
+            let id = file?.id;
+
+            if (file) {
+              // Update last opened (fire and forget)
+              console.log('✏️ Updating lastOpened for:', file.id);
+              updateLastOpened(file.id).catch(console.error);
+              id = file.id;
+
+              // Restore last visited page
+              if (file.lastVisitedPageNo && file.lastVisitedPageNo > 1) {
+                if (active) {
+                  console.log('⬅️ Restoring page:', file.lastVisitedPageNo);
+                  setInitialPage(file.lastVisitedPageNo);
+                  currentPageRef.current = file.lastVisitedPageNo;
+                }
+              }
+            } else {
+              // New file - save it
+              console.log('➕ Adding new PDF:', fileName, filePath);
+              id = await addPdfFile(fileName, filePath);
+              console.log('✅ New PDF ID:', id);
+            }
+
+            if (active && id) {
+              console.log('✅ Setting pdfId:', id);
+              setPdfId(id);
+              setFirebaseReady(true);
+            }
+          } catch (error) {
+            console.error("❌ Error initializing PDF in DB:", error);
+            if (active) {
+              // Even on error, mark as ready so UI works
+              setFirebaseReady(true);
+            }
           }
-          
-          if (active && id) {
-            setPdfId(id);
-            setInitialPage(page);
-            currentPageRef.current = page;
-            setDbLoaded(true);
-          }
-        } catch (error) {
-          console.error("Error initializing PDF in DB:", error);
-          if (active) {
-            setInitialPage(1);
-            setDbLoaded(true);
-          }
-        }
-      })();
+        })();
+      }
       return () => { active = false; };
     }
   }, [filePath, fileName, loading, getPdfFileByPath, addPdfFile, updateLastOpened]);
@@ -417,6 +472,12 @@ export default function ViewerPage() {
     );
   }, [deleteHighlight]);
 
+  const handleMarkdownLinkPress = useCallback(({ url }: { url: string }) => {
+    Linking.openURL(url).catch((error) => {
+      console.error("Failed to open markdown link:", error);
+    });
+  }, []);
+
   const togglePageSelection = useCallback((page: number) => {
     setSelectedPages(prev => {
       if (prev.includes(page)) {
@@ -456,6 +517,18 @@ export default function ViewerPage() {
                   <TouchableOpacity onPress={handleCopy} style={styles.iconButton}>
                     <Ionicons name="copy-outline" size={24} color="#333" />
                   </TouchableOpacity>
+                  <TouchableOpacity 
+                    onPress={() => {
+                      if (selection) {
+                        setChatInitialQuery(`Tell me more about this text from page ${selection.pageNo}: "${selection.text}"`);
+                        setIsChatOpen(true);
+                        clearSelection();
+                      }
+                    }} 
+                    style={styles.iconButton}
+                  >
+                    <Ionicons name="chatbubble-ellipses-outline" size={24} color="#007AFF" />
+                  </TouchableOpacity>
                   <TouchableOpacity onPress={() => setShowColorPicker(true)} style={styles.iconButton}>
                     <Ionicons name="color-palette-outline" size={24} color={highlightColor} />
                   </TouchableOpacity>
@@ -486,7 +559,13 @@ export default function ViewerPage() {
           {item.isLoading ? (
             <SkeletonLoader />
           ) : (
-            <Text style={{ fontSize: 16, lineHeight: 24 }}>{item.text}</Text>
+            <EnrichedMarkdownText
+              flavor="github"
+              markdown={item.text || ""}
+              containerStyle={styles.summaryMarkdownContainer}
+              markdownStyle={summaryMarkdownStyle}
+              onLinkPress={handleMarkdownLinkPress}
+            />
           )}
           <Text style={styles.pageLabel}>Summary Page</Text>
         </View>
@@ -521,7 +600,7 @@ export default function ViewerPage() {
         onToggleSelect={togglePageSelection}
       />
     );
-  }, [highlights, selection, handleHighlightClick, isSelectionMode, selectedPages, togglePageSelection]);
+  }, [highlights, selection, handleHighlightClick, handleMarkdownLinkPress, isSelectionMode, selectedPages, togglePageSelection]);
 
   const handleExecute = async () => {
     if (selectedPages.length === 0) return;
@@ -599,7 +678,7 @@ export default function ViewerPage() {
     }
   };
 
-  if (loading || !dbLoaded || !pdfId) {
+  if (loading || !dbLoaded) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color="#007AFF" />
@@ -707,18 +786,50 @@ export default function ViewerPage() {
             if (!selection) showHeader();
           }}
       />
-      <FAB
-        icon={isSelectionMode ? "check" : "check-circle-outline"}
-        label={isSelectionMode ? "Execute" : "Select Page"}
-        style={styles.fab}
-        onPress={() => {
-          if (isSelectionMode) {
-            handleExecute();
-          } else {
-            setIsSelectionMode(true);
-          }
-        }}
-        visible={!isSelectionMode || (isSelectionMode && selectedPages.length > 0)}
+      
+      {isSelectionMode ? (
+        <FAB
+          icon="check"
+          label={`Execute (${selectedPages.length})`}
+          style={styles.fab}
+          onPress={handleExecute}
+          visible={selectedPages.length > 0}
+        />
+      ) : (
+        <Portal>
+          <FAB.Group
+            open={fabOpen}
+            icon={fabOpen ? 'close' : 'plus'}
+            actions={[
+              {
+                icon: 'chat-outline',
+                label: 'Chat',
+                onPress: () => {
+                   setChatInitialQuery('');
+                   setIsChatOpen(true);
+                },
+              },
+              {
+                icon: 'file-document-outline',
+                label: 'Summarize',
+                onPress: () => setIsSelectionMode(true),
+              },
+            ]}
+            onStateChange={({ open }) => setFabOpen(open)}
+            visible={true}
+            fabStyle={{ backgroundColor: '#007AFF' }}
+            color="white"
+          />
+        </Portal>
+      )}
+
+      <ChatOverlay
+        isVisible={isChatOpen}
+        onClose={() => setIsChatOpen(false)}
+        pdfId={pdfId}
+        currentPage={currentPageRef.current}
+        pageCount={pageCount}
+        initialQuery={chatInitialQuery}
       />
     </View>
   );
@@ -809,6 +920,9 @@ const styles = StyleSheet.create({
     marginVertical: 12,
     fontSize: 14,
     color: "#666",
+  },
+  summaryMarkdownContainer: {
+    flexShrink: 1,
   },
   center: {
     flex: 1,

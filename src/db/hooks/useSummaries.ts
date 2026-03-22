@@ -1,97 +1,105 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useAppDatabase } from '../DatabaseProvider';
-import { SummaryVirtualPage, TableNames } from '../schema';
-import * as Crypto from 'expo-crypto';
+import { useFirebaseDatabase } from '../FirebaseDatabaseProvider';
+import { SummaryVirtualPage } from '../schema';
+import { getDatabase, ref, onValue, set, push, child, remove, get, orderByChild, query, equalTo, update } from '@react-native-firebase/database';
+import { getApp } from '@react-native-firebase/app';
 
 export const useSummaries = (pdfFileId: string) => {
-  const { db, notifyUpdate, useTableVersion } = useAppDatabase();
-  const version = useTableVersion(TableNames.SUMMARY_VIRTUAL_PAGES);
+  const { getSummariesRef } = useFirebaseDatabase();
   const [summaries, setSummaries] = useState<SummaryVirtualPage[]>([]);
-
-  const fetchSummaries = useCallback(async () => {
-    if (!pdfFileId) return;
-    try {
-      const result = await db.getAllAsync<SummaryVirtualPage>(
-        `SELECT * FROM ${TableNames.SUMMARY_VIRTUAL_PAGES} WHERE pdfFileId = $pdfFileId ORDER BY summaryForPdfPageNo ASC`,
-        { $pdfFileId: pdfFileId }
-      );
-      setSummaries(result);
-    } catch (error) {
-      console.error('Error fetching summaries:', error);
-    }
-  }, [db, pdfFileId]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchSummaries();
-  }, [fetchSummaries, version]);
+    console.log('🔔 useSummaries: pdfFileId =', pdfFileId);
+    if (!pdfFileId) {
+      setSummaries([]);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    const dbRef = getSummariesRef();
+    const unsubscribe = onValue(dbRef, (snapshot) => {
+      const data = snapshot.val();
+      console.log('📦 Summaries snapshot:', data ? Object.keys(data).length + ' items' : 'empty');
+      if (data) {
+        const items = Object.entries(data)
+          .filter(([_, value]) => {
+            const summary = value as SummaryVirtualPage;
+            const matches = summary.pdfFileId === pdfFileId;
+            console.log(`  Summary ${summary.pdfFileId} === ${pdfFileId} ? ${matches}`);
+            return matches;
+          })
+          .map(([key, value]) => ({
+            ...(value as SummaryVirtualPage),
+            id: key,
+          }));
+        // Sort by summaryForPdfPageNo ASC
+        items.sort((a, b) => a.summaryForPdfPageNo - b.summaryForPdfPageNo);
+        console.log(`✅ Loaded ${items.length} summaries for PDF ${pdfFileId}`);
+        setSummaries(items);
+      } else {
+        setSummaries([]);
+      }
+      setLoading(false);
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [getSummariesRef, pdfFileId]);
 
   const addOrUpdateSummary = useCallback(async (
     pageNo: number,
     summaryText: string
-  ) => {
-    const id = Crypto.randomUUID();
-    try {
+  ): Promise<void> => {
+    console.log('💾 Saving summary for pdfFileId:', pdfFileId, 'pageNo:', pageNo);
+    const dbRef = getSummariesRef();
+    
+    // Query for existing summary for this pdfFileId
+    const q = query(dbRef, orderByChild('pdfFileId'), equalTo(pdfFileId));
+    const snapshot = await get(q);
+    const data = snapshot.val();
+    console.log('📦 Existing summaries snapshot:', data ? Object.keys(data).length + ' items' : 'empty');
+
+    if (data) {
       // Check if summary exists for this page
-      const existing = await db.getFirstAsync<{ id: string }>(
-        `SELECT id FROM ${TableNames.SUMMARY_VIRTUAL_PAGES} WHERE pdfFileId = $pdfFileId AND summaryForPdfPageNo = $pageNo`,
-        { $pdfFileId: pdfFileId, $pageNo: pageNo }
+      const existingEntry = Object.entries(data).find(
+        ([_, value]) => {
+          const summary = value as SummaryVirtualPage;
+          console.log(`  Checking: ${summary.pdfFileId} === ${pdfFileId} && ${summary.summaryForPdfPageNo} === ${pageNo}`);
+          return summary.pdfFileId === pdfFileId && summary.summaryForPdfPageNo === pageNo;
+        }
       );
 
-      if (existing) {
-        // Update
-        const statement = await db.prepareAsync(
-          `UPDATE ${TableNames.SUMMARY_VIRTUAL_PAGES} SET summary = $summary WHERE id = $id`
-        );
-        try {
-          await statement.executeAsync({
-            $id: existing.id,
-            $summary: summaryText,
-          });
-        } finally {
-          await statement.finalizeAsync();
-        }
-      } else {
-        // Insert
-        const statement = await db.prepareAsync(
-          `INSERT INTO ${TableNames.SUMMARY_VIRTUAL_PAGES} (id, pdfFileId, summaryForPdfPageNo, summary) VALUES ($id, $pdfFileId, $pageNo, $summary)`
-        );
-        try {
-          await statement.executeAsync({
-            $id: id,
-            $pdfFileId: pdfFileId,
-            $pageNo: pageNo,
-            $summary: summaryText,
-          });
-        } finally {
-          await statement.finalizeAsync();
-        }
+      if (existingEntry) {
+        // Update existing
+        const [id] = existingEntry;
+        console.log('✏️ Updating existing summary:', id);
+        await update(child(dbRef, id), { summary: summaryText });
+        return;
       }
-      notifyUpdate(TableNames.SUMMARY_VIRTUAL_PAGES);
-    } catch (error) {
-      console.error('Error saving summary:', error);
-      throw error;
     }
-  }, [db, pdfFileId, notifyUpdate]);
+
+    // Insert new
+    const newRef = push(dbRef);
+    const summary: Omit<SummaryVirtualPage, 'id'> = {
+      pdfFileId,
+      summaryForPdfPageNo: pageNo,
+      summary: summaryText,
+    };
+    console.log('➕ Adding new summary with ID:', newRef.key, 'data:', summary);
+    await set(newRef, summary);
+  }, [getSummariesRef, pdfFileId]);
 
   const deleteSummary = useCallback(async (id: string) => {
-    try {
-      const statement = await db.prepareAsync(
-        `DELETE FROM ${TableNames.SUMMARY_VIRTUAL_PAGES} WHERE id = $id`
-      );
-      try {
-        await statement.executeAsync({ $id: id });
-      } finally {
-        await statement.finalizeAsync();
-      }
-      notifyUpdate(TableNames.SUMMARY_VIRTUAL_PAGES);
-    } catch (error) {
-      console.error('Error deleting summary:', error);
-      throw error;
-    }
-  }, [db, notifyUpdate]);
+    const dbRef = getSummariesRef();
+    await remove(child(dbRef, id));
+  }, [getSummariesRef]);
 
   return {
     summaries,
+    loading,
     addOrUpdateSummary,
     deleteSummary,
   };

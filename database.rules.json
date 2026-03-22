@@ -1,0 +1,22 @@
+{
+  "rules": {
+    "users": {
+      "$userId": {
+        ".read": "$userId === auth.uid",
+        ".write": "$userId === auth.uid",
+        "pdfFiles": {
+          ".indexOn": ["path", "lastOpened"]
+        },
+        "highlights": {
+          ".indexOn": ["pdfFileId", "pageNo"]
+        },
+        "chats": {
+          ".indexOn": ["pdfFileId", "threadId", "timestamp"]
+        },
+        "summaries": {
+          ".indexOn": ["pdfFileId", "summaryForPdfPageNo"]
+        }
+      }
+    }
+  }
+}

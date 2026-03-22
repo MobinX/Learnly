@@ -1,87 +1,80 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useAppDatabase } from '../DatabaseProvider';
-import { Chat, SenderType, TableNames } from '../schema';
-import * as Crypto from 'expo-crypto';
+import { useFirebaseDatabase } from '../FirebaseDatabaseProvider';
+import { Chat, SenderType } from '../schema';
+import { getDatabase, ref, onValue, set, push, child, remove } from '@react-native-firebase/database';
+import { getApp } from '@react-native-firebase/app';
 
 export const useChats = (pdfFileId: string, threadId?: string) => {
-  const { db, notifyUpdate, useTableVersion } = useAppDatabase();
-  const version = useTableVersion(TableNames.CHATS);
+  const { getChatsRef } = useFirebaseDatabase();
   const [messages, setMessages] = useState<Chat[]>([]);
-
-  const fetchMessages = useCallback(async () => {
-    if (!pdfFileId) return;
-    try {
-      let query = `SELECT * FROM ${TableNames.CHATS} WHERE pdfFileId = $pdfFileId`;
-      const params: any = { $pdfFileId: pdfFileId };
-
-      if (threadId) {
-        query += ` AND threadId = $threadId`;
-        params.$threadId = threadId;
-      }
-
-      query += ` ORDER BY timestamp ASC`;
-
-      const result = await db.getAllAsync<Chat>(query, params);
-      setMessages(result);
-    } catch (error) {
-      console.error('Error fetching chat messages:', error);
-    }
-  }, [db, pdfFileId, threadId]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchMessages();
-  }, [fetchMessages, version]);
+    console.log('🔔 useChats: pdfFileId =', pdfFileId, 'threadId =', threadId);
+    if (!pdfFileId) {
+      setMessages([]);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    const dbRef = getChatsRef();
+    const unsubscribe = onValue(dbRef, (snapshot) => {
+      const data = snapshot.val();
+      console.log('📦 Chats snapshot:', data ? Object.keys(data).length + ' items' : 'empty');
+      if (data) {
+        const items = Object.entries(data)
+          .filter(([_, value]) => {
+            const chat = value as Chat;
+            const matches = chat.pdfFileId === pdfFileId && (!threadId || chat.threadId === threadId);
+            console.log(`  Chat ${chat.pdfFileId} === ${pdfFileId} ? ${matches}`);
+            return matches;
+          })
+          .map(([key, value]) => ({
+            ...(value as Chat),
+            id: key,
+          }));
+        // Sort by timestamp ASC
+        items.sort((a, b) => a.timestamp - b.timestamp);
+        console.log(`✅ Loaded ${items.length} chats for PDF ${pdfFileId}`);
+        setMessages(items);
+      } else {
+        setMessages([]);
+      }
+      setLoading(false);
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [getChatsRef, pdfFileId, threadId]);
 
   const addMessage = useCallback(async (
     sender: SenderType,
     messageText: string,
     threadId?: string
-  ) => {
-    const id = Crypto.randomUUID();
-    const timestamp = Date.now();
-    try {
-      const statement = await db.prepareAsync(
-        `INSERT INTO ${TableNames.CHATS} (id, pdfFileId, sender, messageText, timestamp, threadId) VALUES ($id, $pdfFileId, $sender, $messageText, $timestamp, $threadId)`
-      );
-      try {
-        await statement.executeAsync({
-          $id: id,
-          $pdfFileId: pdfFileId,
-          $sender: sender,
-          $messageText: messageText,
-          $timestamp: timestamp,
-          $threadId: threadId ?? null,
-        });
-      } finally {
-        await statement.finalizeAsync();
-      }
-      notifyUpdate(TableNames.CHATS);
-      return id;
-    } catch (error) {
-      console.error('Error adding chat message:', error);
-      throw error;
-    }
-  }, [db, pdfFileId, notifyUpdate]);
+  ): Promise<string> => {
+    const dbRef = getChatsRef();
+    const newRef = push(dbRef);
+    const chat: Omit<Chat, 'id'> = {
+      pdfFileId,
+      sender,
+      messageText,
+      timestamp: Date.now(),
+      threadId,
+    };
+    await set(newRef, chat);
+    return newRef.key!;
+  }, [getChatsRef, pdfFileId]);
 
   const deleteMessage = useCallback(async (id: string) => {
-    try {
-      const statement = await db.prepareAsync(
-        `DELETE FROM ${TableNames.CHATS} WHERE id = $id`
-      );
-      try {
-        await statement.executeAsync({ $id: id });
-      } finally {
-        await statement.finalizeAsync();
-      }
-      notifyUpdate(TableNames.CHATS);
-    } catch (error) {
-      console.error('Error deleting chat message:', error);
-      throw error;
-    }
-  }, [db, notifyUpdate]);
+    const dbRef = getChatsRef();
+    await remove(child(dbRef, id));
+  }, [getChatsRef]);
 
   return {
     messages,
+    loading,
     addMessage,
     deleteMessage,
   };

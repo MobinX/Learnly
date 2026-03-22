@@ -1,99 +1,120 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useAppDatabase } from '../DatabaseProvider';
-import { PdfFile, TableNames } from '../schema';
-import * as Crypto from 'expo-crypto';
+import { useFirebaseDatabase } from '../FirebaseDatabaseProvider';
+import { PdfFile } from '../schema';
+import { getDatabase, ref, onValue, update, remove, set, push, child, get, orderByChild, query, equalTo } from '@react-native-firebase/database';
+import { getApp } from '@react-native-firebase/app';
 
 export const usePdfFiles = () => {
-  const { db, notifyUpdate, useTableVersion } = useAppDatabase();
-  const version = useTableVersion(TableNames.PDF_FILES);
+  const { getPdfFilesRef } = useFirebaseDatabase();
   const [pdfFiles, setPdfFiles] = useState<PdfFile[]>([]);
-
-  const fetchPdfFiles = useCallback(async () => {
-    try {
-      const result = await db.getAllAsync<PdfFile>(
-        `SELECT * FROM ${TableNames.PDF_FILES} ORDER BY lastOpened DESC`
-      );
-      setPdfFiles(result);
-    } catch (error) {
-      console.error('Error fetching PDF files:', error);
-    }
-  }, [db]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchPdfFiles();
-  }, [fetchPdfFiles, version]);
-
-  const addPdfFile = useCallback(async (name: string, path: string) => {
-    const id = Crypto.randomUUID();
-    const now = Date.now();
-    try {
-      const statement = await db.prepareAsync(
-        `INSERT INTO ${TableNames.PDF_FILES} (id, name, path, lastOpened, lastVisitedPageNo) VALUES ($id, $name, $path, $lastOpened, $lastVisitedPageNo)`
-      );
-      try {
-        await statement.executeAsync({
-          $id: id,
-          $name: name,
-          $path: path,
-          $lastOpened: now,
-          $lastVisitedPageNo: 1,
-        });
-      } finally {
-        await statement.finalizeAsync();
+    const dbRef = getPdfFilesRef();
+    console.log('📡 Setting up PDF files listener...');
+    
+    const unsubscribe = onValue(dbRef, (snapshot) => {
+      console.log('📦 PDF files snapshot received:', snapshot.exists() ? 'has data' : 'empty');
+      const data = snapshot.val();
+      if (data) {
+        const files = Object.entries(data).map(([key, value]) => ({
+          ...(value as PdfFile),
+          id: key,
+        }));
+        // Sort by lastOpened DESC
+        files.sort((a, b) => b.lastOpened - a.lastOpened);
+        setPdfFiles(files);
+        console.log(`✅ Loaded ${files.length} PDF files`);
+      } else {
+        console.log('⚠️ No PDF files found in database');
+        setPdfFiles([]);
       }
-      notifyUpdate(TableNames.PDF_FILES);
+      setLoading(false);
+    }, (error) => {
+      console.error('❌ Error listening to PDF files:', error);
+      setLoading(false);
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [getPdfFilesRef]);
+
+  const addPdfFile = useCallback(async (name: string, path: string): Promise<string> => {
+    try {
+      console.log('💾 Adding new PDF:', { name, path });
+      const dbRef = getPdfFilesRef();
+      
+      // First check if file already exists (by name, since path is temp cache)
+      const snapshot = await get(dbRef);
+      const data = snapshot.val();
+      if (data) {
+        // Find by name (path is unreliable due to temp cache)
+        for (const [key, value] of Object.entries(data)) {
+          const pdf = value as PdfFile;
+          if (pdf.name === name) {
+            console.log('⚠️ PDF already exists with ID:', key);
+            // Update with new path and last opened
+            await update(child(dbRef, key), { 
+              path, 
+              lastOpened: Date.now(), 
+              lastVisitedPageNo: 1 
+            });
+            return key;
+          }
+        }
+      }
+      
+      // Create ID based on name only (path is temp cache, unreliable)
+      const sanitizeId = (name: string): string => {
+        // Simple djb2 hash
+        let hash = 5381;
+        for (let i = 0; i < name.length; i++) {
+          hash = ((hash << 5) + hash) + name.charCodeAt(i);
+          hash = hash & hash; // Convert to 32bit integer
+        }
+        // Convert to hex and ensure positive
+        const hashHex = Math.abs(hash).toString(16).padStart(8, '0');
+        return 'pdf_' + hashHex;
+      };
+      
+      const id = sanitizeId(name);
+      console.log('🔑 Generated ID for', name, ':', id);
+      
+      const pdfFile: Omit<PdfFile, 'id'> = {
+        name,
+        path,
+        lastOpened: Date.now(),
+        lastVisitedPageNo: 1,
+      };
+      await set(child(dbRef, id), pdfFile);
+      console.log('✅ PDF added with ID:', id);
       return id;
     } catch (error) {
-      console.error('Error adding PDF file:', error);
+      console.error('❌ Error adding PDF:', error);
       throw error;
     }
-  }, [db, notifyUpdate]);
+  }, [getPdfFilesRef]);
 
   const updateLastOpened = useCallback(async (id: string, pageNo?: number) => {
-    const now = Date.now();
-    try {
-      let query = `UPDATE ${TableNames.PDF_FILES} SET lastOpened = $lastOpened`;
-      const params: any = { $id: id, $lastOpened: now };
-      
-      if (pageNo !== undefined) {
-        query += `, lastVisitedPageNo = $pageNo`;
-        params.$pageNo = pageNo;
-      }
-      
-      query += ` WHERE id = $id`;
-
-      const statement = await db.prepareAsync(query);
-      try {
-        await statement.executeAsync(params);
-      } finally {
-        await statement.finalizeAsync();
-      }
-      notifyUpdate(TableNames.PDF_FILES);
-    } catch (error) {
-      console.error('Error updating PDF file:', error);
-      throw error;
+    const dbRef = getPdfFilesRef();
+    const updates: Partial<PdfFile> = {
+      lastOpened: Date.now(),
+    };
+    if (pageNo !== undefined) {
+      updates.lastVisitedPageNo = pageNo;
     }
-  }, [db, notifyUpdate]);
+    await update(child(dbRef, id), updates);
+  }, [getPdfFilesRef]);
 
   const deletePdfFile = useCallback(async (id: string) => {
-    try {
-      const statement = await db.prepareAsync(
-        `DELETE FROM ${TableNames.PDF_FILES} WHERE id = $id`
-      );
-      try {
-        await statement.executeAsync({ $id: id });
-      } finally {
-        await statement.finalizeAsync();
-      }
-      notifyUpdate(TableNames.PDF_FILES);
-    } catch (error) {
-      console.error('Error deleting PDF file:', error);
-      throw error;
-    }
-  }, [db, notifyUpdate]);
+    const dbRef = getPdfFilesRef();
+    await remove(child(dbRef, id));
+  }, [getPdfFilesRef]);
 
   return {
     pdfFiles,
+    loading,
     addPdfFile,
     updateLastOpened,
     deletePdfFile,
@@ -101,92 +122,115 @@ export const usePdfFiles = () => {
 };
 
 export const usePdfActions = () => {
-  const { db, notifyUpdate } = useAppDatabase();
+  const { getPdfFilesRef } = useFirebaseDatabase();
 
-  const getPdfFileByPath = useCallback(async (path: string) => {
+  const getPdfFileByPath = useCallback(async (path: string, name?: string): Promise<PdfFile | null> => {
     try {
-      const result = await db.getFirstAsync<PdfFile>(
-        `SELECT * FROM ${TableNames.PDF_FILES} WHERE path = $path`,
-        { $path: path }
-      );
-      return result;
+      console.log('🔍 Searching for PDF:', { path, name });
+      const dbRef = getPdfFilesRef();
+      
+      // Search by name (path is temp cache, unreliable)
+      if (name) {
+        const snapshot = await get(dbRef);
+        const data = snapshot.val();
+        if (data) {
+          // Find the file that matches by name
+          for (const [key, value] of Object.entries(data)) {
+            const pdf = value as PdfFile;
+            if (pdf.name === name) {
+              console.log('✅ Found match:', key, 'Name:', pdf.name);
+              
+              // Check if this is an old random ID (starts with -)
+              if (key.startsWith('-')) {
+                console.log('⚠️ Found old random ID, will migrate to hash-based ID');
+                return null; // Force recreation with new ID
+              }
+              
+              return { ...pdf, id: key };
+            }
+          }
+        }
+      }
+      
+      console.log('⚠️ PDF not found in database');
+      return null;
     } catch (error) {
-      console.error('Error getting PDF file by path:', error);
+      console.error('❌ Error getting PDF:', error);
       return null;
     }
-  }, [db]);
+  }, [getPdfFilesRef]);
 
-  const addPdfFile = useCallback(async (name: string, path: string) => {
-    const id = Crypto.randomUUID();
-    const now = Date.now();
+  const addPdfFile = useCallback(async (name: string, path: string): Promise<string> => {
     try {
-      const statement = await db.prepareAsync(
-        `INSERT INTO ${TableNames.PDF_FILES} (id, name, path, lastOpened, lastVisitedPageNo) VALUES ($id, $name, $path, $lastOpened, $lastVisitedPageNo)`
-      );
-      try {
-        await statement.executeAsync({
-          $id: id,
-          $name: name,
-          $path: path,
-          $lastOpened: now,
-          $lastVisitedPageNo: 1,
-        });
-      } finally {
-        await statement.finalizeAsync();
+      console.log('💾 Adding new PDF:', { name, path });
+      const dbRef = getPdfFilesRef();
+      
+      // First check if file already exists (by name, since path is temp cache)
+      const snapshot = await get(dbRef);
+      const data = snapshot.val();
+      if (data) {
+        // Find by name (path is unreliable due to temp cache)
+        for (const [key, value] of Object.entries(data)) {
+          const pdf = value as PdfFile;
+          if (pdf.name === name) {
+            console.log('⚠️ PDF already exists with ID:', key);
+            // Update with new path and last opened
+            await update(child(dbRef, key), { 
+              path, 
+              lastOpened: Date.now(), 
+              lastVisitedPageNo: 1 
+            });
+            return key;
+          }
+        }
       }
-      notifyUpdate(TableNames.PDF_FILES);
+      
+      // Create ID based on name only (path is temp cache, unreliable)
+      const sanitizeId = (name: string): string => {
+        // Simple djb2 hash
+        let hash = 5381;
+        for (let i = 0; i < name.length; i++) {
+          hash = ((hash << 5) + hash) + name.charCodeAt(i);
+          hash = hash & hash; // Convert to 32bit integer
+        }
+        // Convert to hex and ensure positive
+        const hashHex = Math.abs(hash).toString(16).padStart(8, '0');
+        return 'pdf_' + hashHex;
+      };
+      
+      const id = sanitizeId(name);
+      console.log('🔑 Generated ID for', name, ':', id);
+      
+      const pdfFile: Omit<PdfFile, 'id'> = {
+        name,
+        path,
+        lastOpened: Date.now(),
+        lastVisitedPageNo: 1,
+      };
+      await set(child(dbRef, id), pdfFile);
+      console.log('✅ PDF added with ID:', id);
       return id;
     } catch (error) {
-      console.error('Error adding PDF file:', error);
+      console.error('❌ Error adding PDF:', error);
       throw error;
     }
-  }, [db, notifyUpdate]);
+  }, [getPdfFilesRef]);
 
   const updateLastOpened = useCallback(async (id: string, pageNo?: number) => {
-    const now = Date.now();
-    try {
-      let query = `UPDATE ${TableNames.PDF_FILES} SET lastOpened = $lastOpened`;
-      const params: any = { $id: id, $lastOpened: now };
-      
-      if (pageNo !== undefined) {
-        query += `, lastVisitedPageNo = $pageNo`;
-        params.$pageNo = pageNo;
-      }
-      
-      query += ` WHERE id = $id`;
-
-      const statement = await db.prepareAsync(query);
-      try {
-        await statement.executeAsync(params);
-      } finally {
-        await statement.finalizeAsync();
-      }
-      notifyUpdate(TableNames.PDF_FILES);
-    } catch (error) {
-      console.error('Error updating PDF file:', error);
-      throw error;
+    const dbRef = getPdfFilesRef();
+    const updates: Partial<PdfFile> = {
+      lastOpened: Date.now(),
+    };
+    if (pageNo !== undefined) {
+      updates.lastVisitedPageNo = pageNo;
     }
-  }, [db, notifyUpdate]);
+    await update(child(dbRef, id), updates);
+  }, [getPdfFilesRef]);
 
   const updatePageNumberOnly = useCallback(async (id: string, pageNo: number) => {
-    // Updates page number without updating lastOpened (optional) or just updates it.
-    // User asked to "continuously update database about the last visited page"
-    // AND "for performance this should not trigger re render"
-    // So we do NOT call notifyUpdate here.
-    try {
-      const statement = await db.prepareAsync(
-        `UPDATE ${TableNames.PDF_FILES} SET lastVisitedPageNo = $pageNo WHERE id = $id`
-      );
-      try {
-        await statement.executeAsync({ $id: id, $pageNo: pageNo });
-      } finally {
-        await statement.finalizeAsync();
-      }
-      // NO notifyUpdate(TableNames.PDF_FILES);
-    } catch (error) {
-      console.error('Error updating PDF page number:', error);
-    }
-  }, [db]);
+    const dbRef = getPdfFilesRef();
+    await update(child(dbRef, id), { lastVisitedPageNo: pageNo });
+  }, [getPdfFilesRef]);
 
   return {
     getPdfFileByPath,

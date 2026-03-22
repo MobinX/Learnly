@@ -1,29 +1,56 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useAppDatabase } from '../DatabaseProvider';
-import { Highlight, TableNames } from '../schema';
-import * as Crypto from 'expo-crypto';
+import { useFirebaseDatabase } from '../FirebaseDatabaseProvider';
+import { Highlight } from '../schema';
+import { getDatabase, ref, onValue, set, push, child, remove } from '@react-native-firebase/database';
+import { getApp } from '@react-native-firebase/app';
 
 export const useHighlights = (pdfFileId: string) => {
-  const { db, notifyUpdate, useTableVersion } = useAppDatabase();
-  const version = useTableVersion(TableNames.HIGHLIGHTS);
+  const { getHighlightsRef } = useFirebaseDatabase();
   const [highlights, setHighlights] = useState<Highlight[]>([]);
-
-  const fetchHighlights = useCallback(async () => {
-    if (!pdfFileId) return;
-    try {
-      const result = await db.getAllAsync<Highlight>(
-        `SELECT * FROM ${TableNames.HIGHLIGHTS} WHERE pdfFileId = $pdfFileId ORDER BY pageNo, startIndex`,
-        { $pdfFileId: pdfFileId }
-      );
-      setHighlights(result);
-    } catch (error) {
-      console.error('Error fetching highlights:', error);
-    }
-  }, [db, pdfFileId]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchHighlights();
-  }, [fetchHighlights, version]);
+    console.log('🔔 useHighlights: pdfFileId =', pdfFileId);
+    if (!pdfFileId) {
+      setHighlights([]);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    const dbRef = getHighlightsRef();
+    const unsubscribe = onValue(dbRef, (snapshot) => {
+      const data = snapshot.val();
+      console.log('📦 Highlights snapshot:', data ? Object.keys(data).length + ' items' : 'empty');
+      if (data) {
+        const items = Object.entries(data)
+          .filter(([_, value]) => {
+            const highlight = value as Highlight;
+            const matches = highlight.pdfFileId === pdfFileId;
+            console.log(`  Highlight ${highlight.pdfFileId} === ${pdfFileId} ? ${matches}`);
+            return matches;
+          })
+          .map(([key, value]) => ({
+            ...(value as Highlight),
+            id: key,
+          }));
+        // Sort by pageNo, then startIndex
+        items.sort((a, b) => {
+          if (a.pageNo !== b.pageNo) return a.pageNo - b.pageNo;
+          return a.startIndex - b.startIndex;
+        });
+        console.log(`✅ Loaded ${items.length} highlights for PDF ${pdfFileId}`);
+        setHighlights(items);
+      } else {
+        setHighlights([]);
+      }
+      setLoading(false);
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [getHighlightsRef, pdfFileId]);
 
   const addHighlight = useCallback(async (
     pageNo: number,
@@ -32,53 +59,30 @@ export const useHighlights = (pdfFileId: string) => {
     color: string,
     text: string,
     relatedChatId?: string
-  ) => {
-    const id = Crypto.randomUUID();
-    try {
-      const statement = await db.prepareAsync(
-        `INSERT INTO ${TableNames.HIGHLIGHTS} (id, pdfFileId, pageNo, startIndex, endIndex, color, text, relatedChatId) VALUES ($id, $pdfFileId, $pageNo, $startIndex, $endIndex, $color, $text, $relatedChatId)`
-      );
-      try {
-        await statement.executeAsync({
-          $id: id,
-          $pdfFileId: pdfFileId,
-          $pageNo: pageNo,
-          $startIndex: startIndex,
-          $endIndex: endIndex,
-          $color: color,
-          $text: text,
-          $relatedChatId: relatedChatId ?? null,
-        });
-      } finally {
-        await statement.finalizeAsync();
-      }
-      notifyUpdate(TableNames.HIGHLIGHTS);
-      return id;
-    } catch (error) {
-      console.error('Error adding highlight:', error);
-      throw error;
-    }
-  }, [db, pdfFileId, notifyUpdate]);
+  ): Promise<string> => {
+    const dbRef = getHighlightsRef();
+    const newRef = push(dbRef);
+    const highlight: Omit<Highlight, 'id'> = {
+      pdfFileId,
+      pageNo,
+      startIndex,
+      endIndex,
+      color,
+      text,
+      relatedChatId,
+    };
+    await set(newRef, highlight);
+    return newRef.key!;
+  }, [getHighlightsRef, pdfFileId]);
 
   const deleteHighlight = useCallback(async (id: string) => {
-    try {
-      const statement = await db.prepareAsync(
-        `DELETE FROM ${TableNames.HIGHLIGHTS} WHERE id = $id`
-      );
-      try {
-        await statement.executeAsync({ $id: id });
-      } finally {
-        await statement.finalizeAsync();
-      }
-      notifyUpdate(TableNames.HIGHLIGHTS);
-    } catch (error) {
-      console.error('Error deleting highlight:', error);
-      throw error;
-    }
-  }, [db, notifyUpdate]);
+    const dbRef = getHighlightsRef();
+    await remove(child(dbRef, id));
+  }, [getHighlightsRef]);
 
   return {
     highlights,
+    loading,
     addHighlight,
     deleteHighlight,
   };
