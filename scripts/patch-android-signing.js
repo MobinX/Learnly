@@ -69,6 +69,65 @@ fs.writeFileSync(buildGradlePath, buildGradle);
 // 2. Patch android/gradle.properties
 let gradleProperties = fs.readFileSync(gradlePropertiesPath, 'utf8');
 
+// Update JVM args and build optimization settings
+const newJvmArgs = 'org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1024m -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8';
+const parallelSetting = 'org.gradle.parallel=false';
+const workersSetting = 'org.gradle.workers.max=2';
+const kotlinDaemonOptions = 'kotlin.daemon.jvm.options=-Xmx2G,-XX:MaxMetaspaceSize=512m';
+const kotlinIncrementalFalse = 'kotlin.incremental=false';
+const kotlinIncrementalUseClasspathSnapshotFalse = 'kotlin.incremental.useClasspathSnapshot=false';
+
+// Update or add JVM args
+if (gradleProperties.includes('org.gradle.jvmargs=')) {
+  gradleProperties = gradleProperties.replace(/org\.gradle\.jvmargs=.*/g, newJvmArgs);
+  console.log('Updated org.gradle.jvmargs.');
+} else {
+  gradleProperties += `\n${newJvmArgs}`;
+  console.log('Added org.gradle.jvmargs.');
+}
+
+// Update or add parallel setting
+if (gradleProperties.includes('org.gradle.parallel=')) {
+  gradleProperties = gradleProperties.replace(/org\.gradle\.parallel=.*/g, parallelSetting);
+  console.log('Updated org.gradle.parallel.');
+} else {
+  gradleProperties += `\n${parallelSetting}`;
+  console.log('Added org.gradle.parallel.');
+}
+
+// Add workers max setting if not present
+if (!gradleProperties.includes('org.gradle.workers.max=')) {
+  gradleProperties += `\n${workersSetting}`;
+  console.log('Added org.gradle.workers.max.');
+}
+
+// Add or update Kotlin daemon options
+if (gradleProperties.includes('kotlin.daemon.jvm.options=')) {
+  gradleProperties = gradleProperties.replace(/kotlin\.daemon\.jvm\.options=.*/g, kotlinDaemonOptions);
+  console.log('Updated kotlin.daemon.jvm.options.');
+} else {
+  gradleProperties += `\n${kotlinDaemonOptions}`;
+  console.log('Added kotlin.daemon.jvm.options.');
+}
+
+// Add or update Kotlin incremental settings
+if (gradleProperties.includes('kotlin.incremental=')) {
+  gradleProperties = gradleProperties.replace(/kotlin\.incremental=.*/g, kotlinIncrementalFalse);
+  console.log('Updated kotlin.incremental.');
+} else {
+  gradleProperties += `\n${kotlinIncrementalFalse}`;
+  console.log('Added kotlin.incremental.');
+}
+
+if (gradleProperties.includes('kotlin.incremental.useClasspathSnapshot=')) {
+  gradleProperties = gradleProperties.replace(/kotlin\.incremental\.useClasspathSnapshot=.*/g, kotlinIncrementalUseClasspathSnapshotFalse);
+  console.log('Updated kotlin.incremental.useClasspathSnapshot.');
+} else {
+  gradleProperties += `\n${kotlinIncrementalUseClasspathSnapshotFalse}`;
+  console.log('Added kotlin.incremental.useClasspathSnapshot.');
+}
+
+// Append keystore properties
 const keystoreProps = `
 MYAPP_UPLOAD_STORE_FILE=release.keystore
 MYAPP_UPLOAD_KEY_ALIAS=${process.env.ANDROID_KEY_ALIAS}
@@ -76,5 +135,7 @@ MYAPP_UPLOAD_STORE_PASSWORD=${process.env.ANDROID_STORE_PASSWORD}
 MYAPP_UPLOAD_KEY_PASSWORD=${process.env.ANDROID_KEY_PASSWORD}
 `;
 
-fs.appendFileSync(gradlePropertiesPath, keystoreProps);
+gradleProperties += keystoreProps;
 console.log('Appended signing keys to gradle.properties.');
+
+fs.writeFileSync(gradlePropertiesPath, gradleProperties);

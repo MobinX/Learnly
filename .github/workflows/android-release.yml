@@ -53,9 +53,6 @@ jobs:
       - name: Run Expo Prebuild
         run: bun x expo prebuild --platform android
 
-      - name: check gradle.properties contents
-        run: cat android/gradle.properties
-
       - name: Restore Android Gradle Cache
         run: |
           if [ -d ".gradle/android/.gradle" ]; then
@@ -82,6 +79,9 @@ jobs:
 
       - name: Grant Execute Permission for Gradlew
         run: chmod +x android/gradlew
+
+      - name: check gradle.properties contents
+        run: cat android/gradle.properties
 
       - name: Build Android Release
         working-directory: android
