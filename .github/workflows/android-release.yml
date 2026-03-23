@@ -53,6 +53,9 @@ jobs:
       - name: Run Expo Prebuild
         run: bun x expo prebuild --platform android
 
+      - name: check gradle.properties contents
+        run: cat android/gradle.properties
+
       - name: Restore Android Gradle Cache
         run: |
           if [ -d ".gradle/android/.gradle" ]; then
@@ -73,7 +76,7 @@ jobs:
         run: |
           # Decode Keystore
           echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/release.keystore
-          
+
           # Patch Gradle files
           bun scripts/patch-android-signing.js
 
