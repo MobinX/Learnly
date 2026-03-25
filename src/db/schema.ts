@@ -25,7 +25,8 @@ export interface Chat {
   sender: SenderType;
   messageText: string;
   timestamp: number;
-  threadId?: string; // Groups messages into a conversation
+  threadId?: string;
+  pageReferences?: number[];
 }
 
 export interface SummaryVirtualPage {
@@ -35,9 +36,31 @@ export interface SummaryVirtualPage {
   summary: string;
 }
 
+export interface QuizQuestion {
+  question: string;
+  options: string[];
+  correctOption: string;
+  explanation: string;
+}
+
+export interface Quiz {
+  id: string;
+  pdfFileId: string;
+  title: string;
+  pageReferences: number[];
+  totalQuestions: number;
+  optionsPerQuestion: number;
+  aiInstruction?: string;
+  questions: QuizQuestion[];
+  createdAt: number;
+  lastScore?: number; // Last score percentage (0-100)
+  lastAttemptedAt?: number; // Timestamp of last attempt
+}
+
 export enum TableNames {
   PDF_FILES = 'pdf_files',
   HIGHLIGHTS = 'highlights',
   CHATS = 'chats',
   SUMMARY_VIRTUAL_PAGES = 'summary_virtual_pages',
+  QUIZZES = 'quizzes',
 }

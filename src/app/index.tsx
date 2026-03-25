@@ -10,10 +10,12 @@ import {
 import { useRouter } from "expo-router";
 import RnPdfKing, { usePdfDocument } from "rn-pdf-king";
 import { navigationTarget } from "../navigation_state";
+import { useTheme } from "../theme/colors";
 
 export default function IndexPage() {
   const router = useRouter();
   const { loading, filePath, pickFile, error } = usePdfDocument();
+  const { colors } = useTheme();
 
   const handlePickFile = () => {
       navigationTarget.current = '/viewer';
@@ -34,22 +36,21 @@ export default function IndexPage() {
 
   if (loading) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#007AFF" />
-        <Text style={styles.loadingText}>Loading PDF...</Text>
+      <View style={[styles.center, { backgroundColor: colors.background }]}>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Loading PDF...</Text>
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
-      <View style={styles.card}>
-        <Text style={styles.title}>PDF King</Text>
-        <Text style={styles.subtitle}>Select a PDF to get started</Text>
-        <Button title="Pick PDF File" onPress={handlePickFile} color="#007AFF" />
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <View style={[styles.card, { backgroundColor: colors.surface, shadowColor: colors.text }]}>
+        <Text style={[styles.title, { color: colors.text }]}>PDF King</Text>
+        <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Select a PDF to get started</Text>
+        <Button title="PDF File" onPress={handlePickFile} color={colors.primary} />
         <View style={{height: 10}} />
-        <Button title="Test Base64Bitmap and getTextChars" onPress={handleTestFeatures} color="#FF9500" />
-        {error && <Text style={styles.error}>{error}</Text>}
+        {error && <Text style={[styles.error, { color: colors.error }]}>{error}</Text>}
       </View>
     </View>
   );

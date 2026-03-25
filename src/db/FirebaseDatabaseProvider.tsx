@@ -10,6 +10,7 @@ interface FirebaseDatabaseContextType {
   getHighlightsRef: () => FirebaseDatabaseTypes.Reference;
   getChatsRef: () => FirebaseDatabaseTypes.Reference;
   getSummariesRef: () => FirebaseDatabaseTypes.Reference;
+  getQuizzesRef: () => FirebaseDatabaseTypes.Reference;
 }
 
 const FirebaseDatabaseContext = createContext<FirebaseDatabaseContextType | null>(null);
@@ -67,6 +68,11 @@ export const FirebaseDatabaseProvider = ({ children, userId }: FirebaseDatabaseP
     return ref(db, `users/${userId}/summaries`);
   }, [userId]);
 
+  const getQuizzesRef = useCallback(() => {
+    const db = getDatabase(getApp());
+    return ref(db, `users/${userId}/quizzes`);
+  }, [userId]);
+
   return (
     <FirebaseDatabaseContext.Provider
       value={{
@@ -75,6 +81,7 @@ export const FirebaseDatabaseProvider = ({ children, userId }: FirebaseDatabaseP
         getHighlightsRef,
         getChatsRef,
         getSummariesRef,
+        getQuizzesRef,
       }}
     >
       {children}

@@ -5,9 +5,17 @@ import { useEffect } from 'react';
 import { navigationTarget } from '../navigation_state';
 import { DatabaseProvider } from '../db';
 import { PaperProvider } from 'react-native-paper';
+import { useColorScheme } from 'react-native';
 
 export default function RootLayout() {
   const pathname = usePathname();
+  const colorScheme = useColorScheme();
+  const isDark = colorScheme === 'dark';
+  
+  const themeColors = {
+    headerBackground: isDark ? '#1C1C1E' : '#fff',
+    headerTintColor: isDark ? '#fff' : '#333',
+  };
 
   // Handle accidental navigation to unmatched routes (like intent URIs)
   useEffect(() => {
@@ -27,9 +35,10 @@ export default function RootLayout() {
           >
             <Stack
               screenOptions={{
-                headerStyle: { backgroundColor: '#fff' },
-                headerTintColor: '#333',
+                headerStyle: { backgroundColor: themeColors.headerBackground },
+                headerTintColor: themeColors.headerTintColor,
                 headerTitleStyle: { fontWeight: 'bold' },
+                contentStyle: { backgroundColor: isDark ? '#000000' : '#F2F2F7' },
               }}
             />
           </PdfDocumentProvider>

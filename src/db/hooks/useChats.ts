@@ -52,7 +52,8 @@ export const useChats = (pdfFileId: string, threadId?: string) => {
   const addMessage = useCallback(async (
     sender: SenderType,
     messageText: string,
-    threadId?: string
+    threadId?: string,
+    pageReferences?: number[]
   ): Promise<string> => {
     const dbRef = getChatsRef();
     const newRef = push(dbRef);
@@ -62,6 +63,7 @@ export const useChats = (pdfFileId: string, threadId?: string) => {
       messageText,
       timestamp: Date.now(),
       threadId,
+      pageReferences,
     };
     await set(newRef, chat);
     return newRef.key!;

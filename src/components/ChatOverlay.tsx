@@ -21,6 +21,7 @@ import { getApp } from '@react-native-firebase/app';
 import { getAI, getGenerativeModel } from '@react-native-firebase/ai';
 import RnPdfKing from 'rn-pdf-king';
 import { EnrichedMarkdownText, type MarkdownStyle } from 'react-native-enriched-markdown';
+import { useTheme } from '../theme/colors';
 
 interface ChatOverlayProps {
   isVisible: boolean;
@@ -29,6 +30,10 @@ interface ChatOverlayProps {
   currentPage: number;
   pageCount: number;
   initialQuery?: string;
+  selectedPages?: number[];
+  onNavigateToPage?: (page: number) => void;
+  onSaveScrollPosition?: (position: number) => void;
+  onClearReferences?: () => void;
 }
 
 const aiMarkdownStyle: MarkdownStyle = {
@@ -81,33 +86,69 @@ Focus on:
 interface ChatMessageItemProps {
   item: Chat;
   onLinkPress: ({ url }: { url: string }) => void;
+  onNavigateToPage?: (page: number) => void;
 }
 
 const ChatMessageItem = memo(
-  ({ item, onLinkPress }: ChatMessageItemProps) => {
+  ({ item, onLinkPress, onNavigateToPage, isDark, colors }: ChatMessageItemProps & { isDark: boolean; colors: any }) => {
     const formattedTime = useMemo(
       () => new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       [item.timestamp]
     );
+    
+    // Update markdown colors based on theme
+    const themedAiMarkdownStyle: MarkdownStyle = useMemo(() => ({
+      paragraph: { fontSize: 16, lineHeight: 22, color: colors.text, marginBottom: 10 },
+      h1: { fontSize: 22, lineHeight: 30, fontWeight: '700', color: colors.text, marginBottom: 10 },
+      h2: { fontSize: 19, lineHeight: 27, fontWeight: '700', color: colors.text, marginBottom: 8 },
+      h3: { fontSize: 17, lineHeight: 24, fontWeight: '600', color: colors.text, marginBottom: 6 },
+      list: { fontSize: 16, lineHeight: 22, color: colors.text, marginBottom: 8 },
+      codeBlock: { fontSize: 14, lineHeight: 20, backgroundColor: isDark ? '#3A3A3C' : '#EAEAF0', borderRadius: 8, padding: 10 },
+      code: { fontSize: 14, color: colors.text, backgroundColor: isDark ? '#3A3A3C' : '#E5E7EB', borderColor: isDark ? '#48484A' : '#D1D5DB' },
+      link: { color: colors.primary, underline: true },
+      table: {
+        fontSize: 14,
+        borderColor: isDark ? '#48484A' : '#D1D5DB',
+        borderRadius: 8,
+        headerBackgroundColor: isDark ? '#3A3A3C' : '#E5E7EB',
+        cellPaddingHorizontal: 8,
+        cellPaddingVertical: 6,
+      },
+    }), [colors, isDark]);
 
     return (
       <View
         style={[
           styles.messageContainer,
-          item.sender === 'Human' ? styles.humanMessage : styles.aiMessage,
+          item.sender === 'Human' 
+            ? [styles.humanMessage, { backgroundColor: colors.chatHuman }] 
+            : [styles.aiMessage, { backgroundColor: colors.chatAI }],
         ]}
       >
         {item.sender === 'AI' ? (
           <EnrichedMarkdownText
             flavor="github"
             markdown={item.messageText || ''}
-            markdownStyle={aiMarkdownStyle}
+            markdownStyle={themedAiMarkdownStyle}
             containerStyle={styles.aiMarkdownContainer}
             onLinkPress={onLinkPress}
           />
         ) : (
           <Text style={[styles.messageText, styles.humanText]}>{item.messageText}</Text>
         )}
+        
+        {item.sender === 'AI' && item.pageReferences && item.pageReferences.length > 0 && (
+          <TouchableOpacity
+            style={[styles.goToPageButton, { backgroundColor: colors.badge }]}
+            onPress={() => onNavigateToPage?.(item.pageReferences![0])}
+          >
+            <Ionicons name="book-outline" size={16} color={colors.primary} />
+            <Text style={[styles.goToPageText, { color: colors.primary }]}>
+              Go to referred Pages ({item.pageReferences.join(', ')})
+            </Text>
+          </TouchableOpacity>
+        )}
+        
         <Text
           style={[
             styles.timestamp,
@@ -121,10 +162,12 @@ const ChatMessageItem = memo(
   },
   (prevProps, nextProps) =>
     prevProps.onLinkPress === nextProps.onLinkPress &&
+    prevProps.onNavigateToPage === nextProps.onNavigateToPage &&
     prevProps.item.id === nextProps.item.id &&
     prevProps.item.sender === nextProps.item.sender &&
     prevProps.item.messageText === nextProps.item.messageText &&
-    prevProps.item.timestamp === nextProps.item.timestamp
+    prevProps.item.timestamp === nextProps.item.timestamp &&
+    JSON.stringify(prevProps.item.pageReferences) === JSON.stringify(nextProps.item.pageReferences)
 );
 ChatMessageItem.displayName = 'ChatMessageItem';
 
@@ -135,13 +178,39 @@ export const ChatOverlay: React.FC<ChatOverlayProps> = ({
   currentPage,
   pageCount,
   initialQuery,
+  selectedPages,
+  onNavigateToPage,
+  onClearReferences,
 }) => {
+  const { colors, isDark } = useTheme();
   const { messages, addMessage } = useChats(pdfId || '');
+  
+  // Update markdown colors based on theme
+  const themedAiMarkdownStyle: MarkdownStyle = useMemo(() => ({
+    paragraph: { fontSize: 16, lineHeight: 22, color: colors.text, marginBottom: 10 },
+    h1: { fontSize: 22, lineHeight: 30, fontWeight: '700', color: colors.text, marginBottom: 10 },
+    h2: { fontSize: 19, lineHeight: 27, fontWeight: '700', color: colors.text, marginBottom: 8 },
+    h3: { fontSize: 17, lineHeight: 24, fontWeight: '600', color: colors.text, marginBottom: 6 },
+    list: { fontSize: 16, lineHeight: 22, color: colors.text, marginBottom: 8 },
+    codeBlock: { fontSize: 14, lineHeight: 20, backgroundColor: isDark ? '#3A3A3C' : '#EAEAF0', borderRadius: 8, padding: 10 },
+    code: { fontSize: 14, color: colors.text, backgroundColor: isDark ? '#3A3A3C' : '#E5E7EB', borderColor: isDark ? '#48484A' : '#D1D5DB' },
+    link: { color: colors.primary, underline: true },
+    table: {
+      fontSize: 14,
+      borderColor: isDark ? '#48484A' : '#D1D5DB',
+      borderRadius: 8,
+      headerBackgroundColor: isDark ? '#3A3A3C' : '#E5E7EB',
+      cellPaddingHorizontal: 8,
+      cellPaddingVertical: 6,
+    },
+  }), [colors, isDark]);
+  
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const flashListRef = useRef<FlashListRef<Chat>>(null);
   const previousMessageCountRef = useRef(0);
+  const [savedScrollOffset, setSavedScrollOffset] = useState<number | null>(null);
 
   const insets = useSafeAreaInsets();
   const keyboardLiftOffset = Platform.OS === 'ios' ? 40 : 16;
@@ -158,6 +227,27 @@ export const ChatOverlay: React.FC<ChatOverlayProps> = ({
 
     previousMessageCountRef.current = messages.length;
   }, [messages.length]);
+
+  // Save scroll position when overlay is closed
+  useEffect(() => {
+    if (!isVisible && savedScrollOffset !== null) {
+      // Scroll position will be restored when reopened
+    }
+    return () => {
+      if (isVisible && flashListRef.current) {
+        // Save current scroll position when closing
+        // This is a simplified approach - FlashList doesn't have a direct scrollOffset getter
+      }
+    };
+  }, [isVisible]);
+
+  // Restore scroll position when overlay is opened
+  useEffect(() => {
+    if (isVisible && savedScrollOffset !== null && flashListRef.current) {
+      // Restore scroll position if we have a saved one
+      // flashListRef.current.scrollToOffset({ offset: savedScrollOffset, animated: false });
+    }
+  }, [isVisible, savedScrollOffset]);
 
   // Keep chat sheet above keyboard on both iOS and Android.
   useEffect(() => {
@@ -201,9 +291,15 @@ export const ChatOverlay: React.FC<ChatOverlayProps> = ({
 
   const renderMessage = useCallback(
     ({ item }: ListRenderItemInfo<Chat>) => (
-      <ChatMessageItem item={item} onLinkPress={handleMarkdownLinkPress} />
+      <ChatMessageItem 
+        item={item} 
+        onLinkPress={handleMarkdownLinkPress}
+        onNavigateToPage={onNavigateToPage}
+        isDark={isDark}
+        colors={colors}
+      />
     ),
-    [handleMarkdownLinkPress]
+    [handleMarkdownLinkPress, onNavigateToPage, isDark, colors]
   );
 
   const keyExtractor = useCallback((item: Chat) => item.id, []);
@@ -224,11 +320,16 @@ export const ChatOverlay: React.FC<ChatOverlayProps> = ({
       // 1. Add Human message to DB
       await addMessage('Human', query);
 
-      // 2. Prepare images (Current, prev, next)
-      const pagesToCapture = [];
-      if (currentPage > 1) pagesToCapture.push(currentPage - 1);
-      pagesToCapture.push(currentPage);
-      if (currentPage < pageCount) pagesToCapture.push(currentPage + 1);
+      // 2. Prepare images - use selectedPages if provided, otherwise use current page context
+      const pagesToCapture = selectedPages && selectedPages.length > 0 
+        ? [...selectedPages]
+        : (() => {
+            const pages = [];
+            if (currentPage > 1) pages.push(currentPage - 1);
+            pages.push(currentPage);
+            if (currentPage < pageCount) pages.push(currentPage + 1);
+            return pages;
+          })();
 
       const bitmaps = await Promise.all(
         pagesToCapture.map((p) => RnPdfKing.getPageBitmapBase64(p))
@@ -237,22 +338,22 @@ export const ChatOverlay: React.FC<ChatOverlayProps> = ({
       // 3. Prepare AI contents (with history)
       const ai = getAI(getApp());
       const model = getGenerativeModel(ai, { model: 'gemini-2.5-flash-lite' });
-      
+
       // Get last 10 messages for context
       const lastMessages = messages.slice(-10);
       const history = lastMessages.map(m => ({
-        role: m.sender === 'Human' ? 'user' : 'model',
+        role: m.sender === 'Human' ? 'user' as const : 'model' as const,
         parts: [{ text: m.messageText }]
       }));
 
       const contents = [
         {
-          role: 'user',
+          role: 'user' as const,
           parts: [{ text: CHAT_USER_GUIDANCE_PROMPT }],
         },
         ...history,
         {
-          role: 'user',
+          role: 'user' as const,
           parts: [
             { text: query },
             ...bitmaps.map((b) => ({
@@ -271,11 +372,11 @@ export const ChatOverlay: React.FC<ChatOverlayProps> = ({
       });
       const responseText = result.response.text();
 
-      // 4. Add AI response to DB
-      await addMessage('AI', responseText || "I couldn't generate a response.");
+      // 4. Add AI response to DB with page references
+      await addMessage('AI', responseText || "I couldn't generate a response.", undefined, pagesToCapture);
     } catch (error: any) {
       console.error('Error in chat:', error);
-      await addMessage('AI', `Sorry, I encountered an error: ${error.message || 'Unknown error'}`);
+      await addMessage('AI', `Sorry, I encountered an error: ${error.message || 'Unknown error'}`, undefined, selectedPages);
     } finally {
       setIsLoading(false);
     }
@@ -291,23 +392,38 @@ export const ChatOverlay: React.FC<ChatOverlayProps> = ({
     >
       <View style={styles.overlay}>
         {/* Transparent backdrop for closing */}
-        <TouchableOpacity 
-          style={StyleSheet.absoluteFill} 
-          activeOpacity={1} 
-          onPress={onClose} 
+        <TouchableOpacity
+          style={StyleSheet.absoluteFill}
+          activeOpacity={1}
+          onPress={onClose}
         />
-        
+
         <View style={[styles.keyboardWrapper, { paddingBottom: effectiveKeyboardOffset }]}>
-          <View style={styles.container}>
-            <View style={styles.header}>
+          <View style={[styles.container, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
+            <View style={[styles.header, { borderBottomColor: colors.border }]}>
               <View style={styles.headerIndicator} />
               <View style={styles.headerContent}>
-                <Text style={styles.headerTitle}>AI Tutor</Text>
+                <Text style={[styles.headerTitle, { color: colors.text }]}>AI Tutor</Text>
                 <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-                  <Ionicons name="close-circle" size={28} color="#999" />
+                  <Ionicons name="close-circle" size={28} color={colors.textTertiary} />
                 </TouchableOpacity>
               </View>
             </View>
+
+            {/* Reference Pages Indicator (WhatsApp-style) */}
+            {selectedPages && selectedPages.length > 0 && (
+              <View style={styles.referenceContainer}>
+                <View style={[styles.referencePill, { backgroundColor: colors.badge }]}>
+                  <Ionicons name="documents-outline" size={16} color={colors.primary} />
+                  <Text style={[styles.referencePillText, { color: colors.primary }]}>
+                    {selectedPages.length} page{selectedPages.length > 1 ? 's' : ''} included
+                  </Text>
+                  <TouchableOpacity onPress={onClearReferences} style={styles.referenceClose}>
+                    <Ionicons name="close-circle" size={18} color={colors.textSecondary} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
 
             <View style={{ flex: 1 }}>
               <FlashList
@@ -318,33 +434,36 @@ export const ChatOverlay: React.FC<ChatOverlayProps> = ({
                 contentContainerStyle={styles.listContent}
                 keyboardShouldPersistTaps="handled"
                 keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-                estimatedItemSize={220}
               />
             </View>
 
             {isLoading && (
-              <View style={styles.loadingContainer}>
-                <ActivityIndicator size="small" color="#007AFF" />
-                <Text style={styles.loadingText}>AI Tutor is analyzing pages...</Text>
+              <View style={[styles.loadingContainer, { backgroundColor: colors.loading }]}>
+                <ActivityIndicator size="small" color={colors.primary} />
+                <Text style={[styles.loadingText, { color: colors.primary }]}>AI Tutor is analyzing pages...</Text>
               </View>
             )}
 
             <View style={[
-              styles.inputArea, 
-              { paddingBottom: keyboardHeight > 0 ? 12 : Math.max(insets.bottom, 16) }
+              styles.inputArea,
+              { 
+                backgroundColor: colors.surface,
+                borderTopColor: colors.border,
+                paddingBottom: keyboardHeight > 0 ? 12 : Math.max(insets.bottom, 16)
+              }
             ]}>
-              <View style={styles.inputWrapper}>
+              <View style={[styles.inputWrapper, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder }]}>
                 <TextInput
-                  style={styles.input}
+                  style={[styles.input, { color: colors.text }]}
                   placeholder="Ask about these pages..."
                   value={inputText}
                   onChangeText={setInputText}
                   multiline
-                  placeholderTextColor="#999"
+                  placeholderTextColor={colors.textTertiary}
                 />
-                <TouchableOpacity 
-                  onPress={() => handleSend()} 
-                  style={[styles.sendButton, !inputText.trim() && styles.disabledSend]}
+                <TouchableOpacity
+                  onPress={() => handleSend()}
+                  style={[styles.sendButton, !inputText.trim() && { backgroundColor: colors.inputBorder }]}
                   disabled={!inputText.trim() || isLoading}
                 >
                   <Ionicons name="arrow-up" size={24} color="#fff" />
@@ -515,5 +634,44 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#007AFF',
     fontWeight: '600',
+  },
+  referenceContainer: {
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 4,
+    backgroundColor: 'transparent',
+  },
+  referencePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E8F4FF',
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    alignSelf: 'flex-start',
+    gap: 6,
+  },
+  referencePillText: {
+    fontSize: 13,
+    color: '#007AFF',
+    fontWeight: '500',
+  },
+  referenceClose: {
+    marginLeft: 4,
+  },
+  goToPageButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E8F4FF',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginTop: 8,
+    gap: 6,
+  },
+  goToPageText: {
+    fontSize: 12,
+    color: '#007AFF',
+    fontWeight: '500',
   },
 });

@@ -1,4 +1,4 @@
-import React, { useState, useLayoutEffect, useEffect, useRef, useCallback } from "react";
+import React, { useState, useLayoutEffect, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   StyleSheet,
   View,
@@ -10,6 +10,7 @@ import {
   Modal,
   Pressable,
   Linking,
+  BackHandler,
 } from "react-native";
 import { FAB, ActivityIndicator, Portal } from 'react-native-paper';
 import { useNavigation, useRouter } from "expo-router";
@@ -19,12 +20,13 @@ import RnPdfKing, {
   ZoomablePdfPage,
   PdfPageHandle,
 } from "rn-pdf-king";
-import { usePdfActions, useHighlights, useSummaries } from "../db";
+import { usePdfActions, useHighlights, useSummaries, useQuizs } from "../db";
 import { useGenerateSummary } from "../hooks/useGenerateSummary";
-import Animated, { 
-  useSharedValue, 
-  useAnimatedStyle, 
-  withTiming, 
+import { useGenerateQuiz } from "../hooks/useGenerateQuiz";
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
   cancelAnimation,
   runOnJS,
   withRepeat
@@ -34,7 +36,12 @@ import { Ionicons, AntDesign, MaterialCommunityIcons } from '@expo/vector-icons'
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ColorPicker, { Panel1, Swatches, Preview, OpacitySlider, HueSlider } from 'reanimated-color-picker';
 import { ChatOverlay } from "../components/ChatOverlay";
+import { QuizOverlay } from "../components/QuizOverlay";
+import { QuizListOverlay } from "../components/QuizListOverlay";
+import { QuizConfigModal } from "../components/QuizConfigModal";
 import { EnrichedMarkdownText, type MarkdownStyle } from "react-native-enriched-markdown";
+import type { Quiz } from "../db/schema";
+import { useTheme } from "../theme/colors";
 
 const HEADER_HEIGHT = 60;
 const summaryMarkdownStyle: MarkdownStyle = {
@@ -198,7 +205,29 @@ export default function ViewerPage() {
   const navigation = useNavigation();
   const router = useRouter();
   const { loading, pageCount, filePath, fileName, clearAllSelections } = usePdfDocument();
+  const { colors, isDark } = useTheme();
   
+  // Always use light theme for markdown summaries (never dark)
+  const themedSummaryMarkdownStyle: MarkdownStyle = useMemo(() => ({
+    paragraph: { fontSize: 16, lineHeight: 24, color: "#1C1C1E", marginBottom: 12 },
+    h1: { fontSize: 26, lineHeight: 34, fontWeight: "700", color: "#111827", marginBottom: 12 },
+    h2: { fontSize: 22, lineHeight: 30, fontWeight: "700", color: "#111827", marginBottom: 10 },
+    h3: { fontSize: 19, lineHeight: 27, fontWeight: "600", color: "#111827", marginBottom: 8 },
+    list: { fontSize: 16, lineHeight: 24, color: "#1C1C1E", marginBottom: 8 },
+    codeBlock: { fontSize: 14, lineHeight: 20, backgroundColor: "#F3F4F6", borderRadius: 8, padding: 10 },
+    code: { fontSize: 14, color: "#111827", backgroundColor: "#EEF2FF", borderColor: "#E5E7EB" },
+    link: { color: "#007AFF", underline: true },
+    blockquote: { color: "#374151", borderColor: "#D1D5DB", borderWidth: 4, gapWidth: 12, backgroundColor: "#F9FAFB" },
+    table: {
+      fontSize: 14,
+      borderColor: "#E5E7EB",
+      borderRadius: 8,
+      headerBackgroundColor: "#F3F4F6",
+      cellPaddingHorizontal: 10,
+      cellPaddingVertical: 6,
+    },
+  }), []);
+
   const { getPdfFileByPath, addPdfFile, updateLastOpened, updatePageNumberOnly } = usePdfActions();
   const [dbLoaded, setDbLoaded] = useState(false);
   const [initialPage, setInitialPage] = useState(1);
@@ -209,6 +238,8 @@ export default function ViewerPage() {
   const [viewerData, setViewerData] = useState<ViewerItemType[]>([]);
 
   const currentPageRef = useRef(1);
+  const navigateToPageIndexRef = useRef<number | null>(null);
+  const [, forceUpdate] = useState(0);
 
   // Selection state
   const [selection, setSelection] = useState<{
@@ -226,6 +257,16 @@ export default function ViewerPage() {
   const [chatInitialQuery, setChatInitialQuery] = useState('');
   const [fabOpen, setFabOpen] = useState(false);
 
+  // Quiz states
+  const [isQuizOpen, setIsQuizOpen] = useState(false);
+  const [showQuizConfig, setShowQuizConfig] = useState(false);
+  const [showQuizList, setShowQuizList] = useState(false);
+  const [selectedQuiz, setSelectedQuiz] = useState<Quiz | null>(null);
+  const [isGeneratingQuiz, setIsGeneratingQuiz] = useState(false);
+
+  // Chat scroll position memory
+  const [chatScrollPosition, setChatScrollPosition] = useState<number | null>(null);
+
   const [highlightColor, setHighlightColor] = useState('rgba(0, 0, 255, 0.3)'); // Default to blue
   const [showColorPicker, setShowColorPicker] = useState(false);
 
@@ -237,7 +278,9 @@ export default function ViewerPage() {
   console.log('📄 Viewer: pdfId =', pdfId, 'fileName =', fileName);
   const { highlights, addHighlight, deleteHighlight } = useHighlights(pdfId || "");
   const { summaries, addOrUpdateSummary } = useSummaries(pdfId || "");
+  const { quizs, addQuiz, deleteQuiz, updateQuizScore } = useQuizs(pdfId || "");
   const { generateSummary } = useGenerateSummary();
+  const { generateQuiz } = useGenerateQuiz();
   
   const insets = useSafeAreaInsets();
   const headerHeight = HEADER_HEIGHT + insets.top;
@@ -248,12 +291,6 @@ export default function ViewerPage() {
     });
   }, [navigation]);
 
-  const showHeader = useCallback(() => {
-    cancelAnimation(headerOpacity);
-    headerOpacity.value = withTiming(1, { duration: 300 });
-    resetInactivityTimer();
-  }, [headerOpacity, resetInactivityTimer]);
-
   const hideHeader = useCallback(() => {
     cancelAnimation(headerOpacity);
     headerOpacity.value = withTiming(0, { duration: 300 });
@@ -261,7 +298,7 @@ export default function ViewerPage() {
 
   const resetInactivityTimer = useCallback(() => {
     if (selection) return; // Don't hide if selecting
-    
+
     if (inactivityTimer.current) {
       clearTimeout(inactivityTimer.current);
     }
@@ -269,6 +306,28 @@ export default function ViewerPage() {
       hideHeader();
     }, 1000); // 1s inactivity
   }, [selection, hideHeader]);
+
+  const showHeader = useCallback(() => {
+    cancelAnimation(headerOpacity);
+    headerOpacity.value = withTiming(1, { duration: 300 });
+    resetInactivityTimer();
+  }, [headerOpacity, resetInactivityTimer]);
+
+  // Handle back button when selection mode is active
+  useEffect(() => {
+    const onBackPress = () => {
+      if (isSelectionMode) {
+        // Exit selection mode instead of going back
+        setIsSelectionMode(false);
+        setSelectedPages([]);
+        return true; // Prevent default back behavior
+      }
+      return false; // Allow default back behavior
+    };
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => subscription.remove();
+  }, [isSelectionMode]);
 
   // Initial setup and reset
   useEffect(() => {
@@ -495,55 +554,55 @@ export default function ViewerPage() {
 
   const renderHeader = () => {
     return (
-      <Animated.View style={[styles.header, headerStyle, { height: headerHeight, paddingTop: insets.top }]}>
+      <Animated.View style={[styles.header, headerStyle, { height: headerHeight, paddingTop: insets.top, backgroundColor: 'rgba(255,255,255,0.95)', borderBottomColor: "transparent" }]}>
           <View style={styles.headerContent}>
             {isSelectionMode ? (
-              <View style={styles.selectionHeader}>
+              <View style={[styles.selectionHeader, { backgroundColor: colors.surfaceSecondary }]}>
                 <TouchableOpacity onPress={() => {
                   setIsSelectionMode(false);
                   setSelectedPages([]);
                 }} style={styles.iconButton}>
-                  <Ionicons name="close" size={24} color="#333" />
+                  <Ionicons name="close" size={24} color={colors.text} />
                 </TouchableOpacity>
-                <Text style={styles.title}>{selectedPages.length} Selected</Text>
+                <Text style={[styles.title, { color: colors.text }]}>{selectedPages.length} Selected</Text>
                 <View style={{ width: 40 }} />
               </View>
             ) : selection ? (
-              <View style={styles.selectionHeader}>
+              <View style={[styles.selectionHeader, { backgroundColor: colors.surfaceSecondary }]}>
                 <TouchableOpacity onPress={clearSelection} style={styles.iconButton}>
-                  <Ionicons name="close" size={24} color="#333" />
+                  <Ionicons name="close" size={24} color={colors.text} />
                 </TouchableOpacity>
                 <View style={styles.actionButtons}>
                   <TouchableOpacity onPress={handleCopy} style={styles.iconButton}>
-                    <Ionicons name="copy-outline" size={24} color="#333" />
+                    <Ionicons name="copy-outline" size={24} color={colors.text} />
                   </TouchableOpacity>
-                  <TouchableOpacity 
+                  <TouchableOpacity
                     onPress={() => {
                       if (selection) {
                         setChatInitialQuery(`Tell me more about this text from page ${selection.pageNo}: "${selection.text}"`);
                         setIsChatOpen(true);
                         clearSelection();
                       }
-                    }} 
+                    }}
                     style={styles.iconButton}
                   >
-                    <Ionicons name="chatbubble-ellipses-outline" size={24} color="#007AFF" />
+                    <Ionicons name="chatbubble-ellipses-outline" size={24} color={colors.text} />
                   </TouchableOpacity>
                   <TouchableOpacity onPress={() => setShowColorPicker(true)} style={styles.iconButton}>
-                    <Ionicons name="color-palette-outline" size={24} color={highlightColor} />
+                    <Ionicons name="color-palette-outline" size={24} color={colors.text} />
                   </TouchableOpacity>
                   <TouchableOpacity onPress={handleHighlight} style={styles.iconButton}>
-                    <AntDesign name="highlight" size={24} color={highlightColor} />
+                    <AntDesign name="highlight" size={24} color={colors.text} />
                   </TouchableOpacity>
                 </View>
               </View>
             ) : (
               <View style={styles.normalHeader}>
                 <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-                  <Ionicons name="chevron-back" size={24} color="#007AFF" />
-                  <Text style={styles.backText}>Back</Text>
+                  <Ionicons name="chevron-back" size={24} color={colors.primary} />
+                  <Text style={[styles.backText, { color: colors.primary }]}>Back</Text>
                 </TouchableOpacity>
-                <Text style={styles.title} numberOfLines={1}>{fileName}</Text>
+                <Text style={[styles.title, { color: colors.text }]} numberOfLines={1}>{fileName}</Text>
                 <View style={{ width: 60 }} />
               </View>
             )}
@@ -559,13 +618,14 @@ export default function ViewerPage() {
           {item.isLoading ? (
             <SkeletonLoader />
           ) : (
-            <EnrichedMarkdownText
-              flavor="github"
-              markdown={item.text || ""}
-              containerStyle={styles.summaryMarkdownContainer}
-              markdownStyle={summaryMarkdownStyle}
-              onLinkPress={handleMarkdownLinkPress}
-            />
+            <View style={[styles.summaryMarkdownContainer, { backgroundColor: '#FFFFFF', padding: 20 }]}>
+              <EnrichedMarkdownText
+                flavor="github"
+                markdown={item.text || ""}
+                markdownStyle={themedSummaryMarkdownStyle}
+                onLinkPress={handleMarkdownLinkPress}
+              />
+            </View>
           )}
           <Text style={styles.pageLabel}>Summary Page</Text>
         </View>
@@ -624,7 +684,7 @@ export default function ViewerPage() {
       const insertIndex = newData.findIndex(
         item => item.type === 'pdf' && item.pageNo === firstPage
       );
-      
+
       if (insertIndex !== -1) {
         newData.splice(insertIndex, 0, newPage);
       } else {
@@ -642,23 +702,23 @@ export default function ViewerPage() {
       const bitmaps = await Promise.all(
         sortedPages.map(page => RnPdfKing.getPageBitmapBase64(page))
       );
-      
+
       let finalSummary = "";
-      
+
       // Generate summary with streaming
       await generateSummary(bitmaps, (text) => {
         finalSummary = text;
-        setViewerData(prev => prev.map(item => 
-          (item.type === 'custom' && item.id === newPageId) 
-            ? { ...item, text: text } 
+        setViewerData(prev => prev.map(item =>
+          (item.type === 'custom' && item.id === newPageId)
+            ? { ...item, text: text }
             : item
         ));
       });
 
       // Final update to remove loading state
-      setViewerData(prev => prev.map(item => 
-          (item.type === 'custom' && item.id === newPageId) 
-            ? { ...item, text: finalSummary, isLoading: false } 
+      setViewerData(prev => prev.map(item =>
+          (item.type === 'custom' && item.id === newPageId)
+            ? { ...item, text: finalSummary, isLoading: false }
             : item
       ));
 
@@ -670,13 +730,126 @@ export default function ViewerPage() {
     } catch (error) {
       console.error("Error executing page extraction:", error);
       Alert.alert("Error", "Failed to generate summary.");
-      
+
       // Remove the failed page
-      setViewerData(prev => prev.filter(item => 
+      setViewerData(prev => prev.filter(item =>
         !(item.type === 'custom' && item.id === newPageId)
       ));
     }
   };
+
+  const handleChatWithPages = () => {
+    if (selectedPages.length === 0) return;
+    setIsSelectionMode(false);
+    setIsChatOpen(true);
+    // Don't clear selectedPages here - they're needed in ChatOverlay
+  };
+
+  const handleQuizWithPages = () => {
+    if (selectedPages.length === 0) return;
+    setIsSelectionMode(false);
+    setShowQuizConfig(true);
+  };
+
+  const handleGenerateQuiz = async (config: {
+    totalQuestions: number;
+    optionsPerQuestion: number;
+    aiInstruction: string;
+  }) => {
+    console.log('🚀 Starting quiz generation, config:', config);
+    // Set loading state immediately when generation starts
+    setIsGeneratingQuiz(true);
+    console.log('✅ Set isGeneratingQuiz to true');
+
+    try {
+      const sortedPages = [...selectedPages].sort((a, b) => a - b);
+      console.log('📄 Selected pages:', sortedPages);
+      
+      // Fetch bitmaps for all selected pages
+      console.log('📸 Fetching bitmaps...');
+      const bitmaps = await Promise.all(
+        sortedPages.map(page => RnPdfKing.getPageBitmapBase64(page))
+      );
+      console.log('✅ Bitmaps fetched:', bitmaps.length);
+
+      // Generate quiz
+      console.log('🤖 Generating quiz with AI...');
+      const quizOutput = await generateQuiz(bitmaps, {
+        totalQuestions: config.totalQuestions,
+        optionsPerQuestion: config.optionsPerQuestion,
+        aiInstruction: config.aiInstruction || undefined,
+      });
+      console.log('✅ Quiz generated:', quizOutput.title, quizOutput.quizzes.length, 'questions');
+
+      // Save to Firebase
+      console.log('💾 Saving to Firebase...');
+      const quizId = await addQuiz(
+        quizOutput.title,
+        sortedPages,
+        config.totalQuestions,
+        config.optionsPerQuestion,
+        config.aiInstruction || undefined,
+        quizOutput.quizzes
+      );
+      console.log('✅ Saved with ID:', quizId);
+
+      // Open quiz overlay
+      const newQuiz: Quiz = {
+        id: quizId,
+        pdfFileId: pdfId!,
+        title: quizOutput.title,
+        pageReferences: sortedPages,
+        totalQuestions: config.totalQuestions,
+        optionsPerQuestion: config.optionsPerQuestion,
+        aiInstruction: config.aiInstruction || undefined,
+        questions: quizOutput.quizzes,
+        createdAt: Date.now(),
+      };
+
+      setSelectedQuiz(newQuiz);
+      setIsQuizOpen(true);
+      setSelectedPages([]);
+      console.log('✅ Quiz state updated');
+      
+      // Close config modal AFTER quiz is generated
+      setShowQuizConfig(false);
+      console.log('✅ Closed config modal');
+
+    } catch (error: any) {
+      console.error("❌ Error generating quiz:", error);
+      Alert.alert("Error", "Failed to generate quiz. Please try again.");
+    } finally {
+      // Always reset loading state
+      setIsGeneratingQuiz(false);
+      console.log('✅ Reset isGeneratingQuiz to false');
+    }
+  };
+
+  const handleNavigateToPage = useCallback((page: number) => {
+    // Navigate to the specified page in the viewer
+    // Find the index of the page in viewerData (0-based index)
+    const index = viewerData.findIndex(item => item.type === 'pdf' && item.pageNo === page);
+    console.log('🔍 Navigate to page:', page, 'index:', index, 'viewerData length:', viewerData.length);
+    if (index !== -1) {
+      // Close chat overlay first
+      setIsChatOpen(false);
+      // Clear selected pages
+      setSelectedPages([]);
+      
+      // Set the navigate index using ref and force update
+      console.log('📍 Setting navigateToPageIndexRef to:', index);
+      navigateToPageIndexRef.current = index;
+      forceUpdate(n => n + 1);
+    }
+  }, [viewerData]);
+
+  const handleClearChatReferences = useCallback(() => {
+    // Clear selected pages when user dismisses the reference pill
+    setSelectedPages([]);
+    // Also clear navigation ref
+    navigateToPageIndexRef.current = null;
+    forceUpdate(n => n + 1);
+  }, []);
 
   if (loading || !dbLoaded) {
     return (
@@ -695,9 +868,11 @@ export default function ViewerPage() {
   }
 
   // Ensure initialPage is valid
-  // Note: with custom pages, initialPage logic might need adjustment if we wanted to deep link to a specific item index
-  // But for now keeping it simple based on PDF page count
   const validInitialIndex = Math.max(0, Math.min(initialPage, pageCount) - 1);
+  
+  // Use navigateToPageIndexRef if set, otherwise use validInitialIndex
+  const effectiveInitialIndex = navigateToPageIndexRef.current !== null ? navigateToPageIndexRef.current : validInitialIndex;
+  console.log('📍 effectiveInitialIndex:', effectiveInitialIndex, 'navigateToPageIndexRef:', navigateToPageIndexRef.current, 'validInitialIndex:', validInitialIndex);
 
   const onSelectColor = ({ hex }: { hex: string }) => {
     'worklet';
@@ -751,12 +926,11 @@ export default function ViewerPage() {
       <ZoomableList
           data={viewerData}
           renderItem={renderItem}
-          estimatedItemSize={500}
           keyExtractor={(item: ViewerItemType, index: number) => {
              if (item.type === 'pdf') return `pdf-${item.pageNo}`;
              return item.id;
           }}
-          scrollEnabled={!selection} // Disable scroll when selecting? User didn't specify but usually good.
+          scrollEnabled={!selection}
           pageSliderEnabled
           pageSliderLabel={(current, total) => `${current}/${total}`}
           pageSliderLogo={<GripHorizontal size={20} color="#666" />}
@@ -764,11 +938,11 @@ export default function ViewerPage() {
             // pageIndex is 1-based index from the list
             // We need to map it to the actual PDF page number if possible
             const item = viewerData[pageIndex - 1];
-            
+
             if (pageIndex < currentPageRef.current) {
               showHeader();
             }
-            
+
             // Only update DB if it's a PDF page
             if (item && item.type === 'pdf') {
                currentPageRef.current = item.pageNo;
@@ -780,27 +954,44 @@ export default function ViewerPage() {
                updatePageNumberOnly(pdfId, currentPageRef.current);
             }
           }}
-          initialScrollIndex={validInitialIndex}
-          key={pdfId || 'loading'}
+          initialScrollIndex={effectiveInitialIndex}
+          key={navigateToPageIndexRef.current !== null ? `${pdfId || 'loading'}-nav-${navigateToPageIndexRef.current}` : (pdfId || 'loading')}
           onTouchStart={() => {
             if (!selection) showHeader();
           }}
       />
       
       {isSelectionMode ? (
-        <FAB
-          icon="check"
-          label={`Execute (${selectedPages.length})`}
-          style={styles.fab}
-          onPress={handleExecute}
-          visible={selectedPages.length > 0}
-        />
+        <View style={styles.fabContainer}>
+          <FAB
+            icon="text-box-outline"
+            label="Summarize"
+            style={[styles.fabVertical, styles.fabSummarize]}
+            onPress={handleExecute}
+            visible={selectedPages.length > 0}
+          />
+          <FAB
+            icon="chat-outline"
+            label="Chat"
+            style={[styles.fabVertical, styles.fabChat]}
+            onPress={handleChatWithPages}
+            visible={selectedPages.length > 0}
+          />
+          <FAB
+            icon="school-outline"
+            label="Quiz"
+            style={[styles.fabVertical, styles.fabQuiz]}
+            onPress={handleQuizWithPages}
+            visible={selectedPages.length > 0}
+          />
+        </View>
       ) : (
         <Portal>
           <FAB.Group
             open={fabOpen}
             icon={fabOpen ? 'close' : 'plus'}
             actions={[
+
               {
                 icon: 'chat-outline',
                 label: 'Chat',
@@ -809,9 +1000,27 @@ export default function ViewerPage() {
                    setIsChatOpen(true);
                 },
               },
+             
+              {
+                icon: 'school-outline',
+                label: quizs.length > 0 ? `Quiz (${quizs.length})` : 'Quiz',
+                onPress: () => {
+                  if (quizs.length === 0) {
+                    // No quizzes yet, show hint to select pages
+                    Alert.alert(
+                      'Create a Quiz',
+                      'Select pages first, then tap Quiz to generate a quiz from those pages.',
+                      [{ text: 'OK', onPress: () => setIsSelectionMode(true) }]
+                    );
+                  } else {
+                    // Show list of saved quizzes
+                    setShowQuizList(true);
+                  }
+                },
+              },
               {
                 icon: 'file-document-outline',
-                label: 'Summarize',
+                label: 'Select Pages',
                 onPress: () => setIsSelectionMode(true),
               },
             ]}
@@ -825,11 +1034,55 @@ export default function ViewerPage() {
 
       <ChatOverlay
         isVisible={isChatOpen}
-        onClose={() => setIsChatOpen(false)}
+        onClose={() => {
+          setIsChatOpen(false);
+          setSelectedPages([]);
+        }}
         pdfId={pdfId}
         currentPage={currentPageRef.current}
         pageCount={pageCount}
         initialQuery={chatInitialQuery}
+        selectedPages={selectedPages}
+        onNavigateToPage={handleNavigateToPage}
+        onClearReferences={handleClearChatReferences}
+      />
+
+      <QuizConfigModal
+        visible={showQuizConfig}
+        onClose={() => setShowQuizConfig(false)}
+        onSubmit={handleGenerateQuiz}
+        loading={isGeneratingQuiz}
+      />
+
+      <QuizOverlay
+        visible={isQuizOpen}
+        quiz={selectedQuiz}
+        onClose={() => {
+          setIsQuizOpen(false);
+          setSelectedQuiz(null);
+        }}
+        onSaveScore={async (score: number) => {
+          if (selectedQuiz) {
+            await updateQuizScore(selectedQuiz.id, score);
+            // Update local state to reflect the new score
+            setSelectedQuiz({
+              ...selectedQuiz,
+              lastScore: score,
+              lastAttemptedAt: Date.now(),
+            });
+          }
+        }}
+      />
+
+      <QuizListOverlay
+        visible={showQuizList}
+        onClose={() => setShowQuizList(false)}
+        quizzes={quizs}
+        onSelectQuiz={(quiz) => {
+          setShowQuizList(false);
+          setSelectedQuiz(quiz);
+          setIsQuizOpen(true);
+        }}
       />
     </View>
   );
@@ -846,6 +1099,25 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     zIndex: 1000,
+  },
+  fabContainer: {
+    position: 'absolute',
+    right: 16,
+    bottom: 16,
+    zIndex: 1000,
+    gap: 12,
+  },
+  fabVertical: {
+    marginBottom: 0,
+  },
+  fabSummarize: {
+    backgroundColor: '#007AFF',
+  },
+  fabChat: {
+    backgroundColor: '#34C759',
+  },
+  fabQuiz: {
+    backgroundColor: '#FF9500',
   },
   checkboxContainer: {
     position: 'absolute',
