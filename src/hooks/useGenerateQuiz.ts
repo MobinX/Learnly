@@ -1,7 +1,22 @@
-import { useState, useCallback } from 'react';
-import { getApp } from '@react-native-firebase/app';
-import { getAI, getGenerativeModel } from '@react-native-firebase/ai';
+import { useCallback } from 'react';
+import { z } from 'zod';
 import type { QuizQuestion } from '../db/schema';
+import { useAI } from './useAI';
+
+// Zod schema for quiz output validation
+const QuizQuestionSchema = z.object({
+  question: z.string(),
+  options: z.array(z.string()),
+  correctOption: z.string(),
+  explanation: z.string(),
+});
+
+const QuizOutputSchema = z.object({
+  title: z.string(),
+  quizzes: z.array(QuizQuestionSchema),
+});
+
+type QuizOutput = z.infer<typeof QuizOutputSchema>;
 
 const QUIZ_SYSTEM_PROMPT = `You are Learnly's expert quiz generator for educational content.
 
@@ -48,83 +63,53 @@ export interface QuizConfig {
   aiInstruction?: string;
 }
 
-export interface QuizOutput {
-  title: string;
-  quizzes: QuizQuestion[];
-}
-
 export const useGenerateQuiz = () => {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
+  const { generateContent, createImageParts, createUserMessage, loading, error } = useAI();
 
   const generateQuiz = useCallback(async (
     base64Images: string[],
     config: QuizConfig
   ): Promise<QuizOutput> => {
-    setLoading(true);
-    setError(null);
+    console.log('[useGenerateQuiz] Starting quiz generation with config:', config);
+    console.log('[useGenerateQuiz] Number of images:', base64Images.length);
+    
+    const userPrompt = QUIZ_USER_PROMPT
+      .replace('{totalQuestions}', config.totalQuestions.toString())
+      .replace('{optionsPerQuestion}', config.optionsPerQuestion.toString())
+      .replace('{aiInstruction}', config.aiInstruction ? `Additional instructions: ${config.aiInstruction}` : '');
 
-    try {
-      const app = getApp();
-      const ai = getAI(app);
-      const model = getGenerativeModel(ai, { 
-        model: 'gemini-2.5-flash-lite',
-        generationConfig: {
-          responseMimeType: 'application/json',
-        },
-      });
+    console.log('[useGenerateQuiz] User prompt:', userPrompt.substring(0, 200));
 
-      const userPrompt = QUIZ_USER_PROMPT
-        .replace('{totalQuestions}', config.totalQuestions.toString())
-        .replace('{optionsPerQuestion}', config.optionsPerQuestion.toString())
-        .replace('{aiInstruction}', config.aiInstruction ? `Additional instructions: ${config.aiInstruction}` : '');
+    const imageParts = createImageParts(base64Images);
+    const userMessage = createUserMessage(userPrompt, imageParts);
 
-      const result = await model.generateContent({
-        systemInstruction: QUIZ_SYSTEM_PROMPT,
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              { text: userPrompt },
-              ...base64Images.map(b64 => ({
-                inlineData: {
-                  mimeType: 'image/png',
-                  data: b64,
-                },
-              })),
-            ],
-          },
-        ],
-      });
+    // Use structured output with Zod schema - no more manual JSON parsing!
+    const quizData = await generateContent({
+      systemInstruction: QUIZ_SYSTEM_PROMPT,
+      messages: [userMessage],
+    }, {
+      outputSchema: QuizOutputSchema,
+    });
 
-      const responseText = result.response.text();
-      const parsed: QuizOutput = JSON.parse(responseText);
+    console.log('[useGenerateQuiz] Generated quiz:', {
+      title: quizData.title,
+      questionCount: quizData.quizzes?.length,
+    });
 
-      // Validate the output
-      if (!parsed.title || !Array.isArray(parsed.quizzes)) {
-        throw new Error('Invalid quiz format from AI');
-      }
-
-      // Validate each question
-      for (const q of parsed.quizzes) {
-        if (!q.question || !Array.isArray(q.options) || !q.correctOption || !q.explanation) {
-          throw new Error('Invalid question format in quiz');
-        }
-        if (!q.options.includes(q.correctOption)) {
-          throw new Error('Correct option not found in options array');
-        }
-      }
-
-      return parsed;
-
-    } catch (e: any) {
-      console.error("Error generating quiz:", e);
-      setError(e);
-      throw e;
-    } finally {
-      setLoading(false);
+    // Validation is automatic via Zod schema, but we can add extra checks
+    if (!quizData.title || !Array.isArray(quizData.quizzes)) {
+      throw new Error('Invalid quiz format from AI');
     }
-  }, []);
+
+    // Validate each question has correct option in options array
+    for (const q of quizData.quizzes) {
+      if (!q.options.includes(q.correctOption)) {
+        throw new Error('Correct option not found in options array');
+      }
+    }
+
+    return quizData;
+  }, [generateContent, createImageParts, createUserMessage]);
 
   return { generateQuiz, loading, error };
 };

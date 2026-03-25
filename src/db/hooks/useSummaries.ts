@@ -51,11 +51,12 @@ export const useSummaries = (pdfFileId: string) => {
 
   const addOrUpdateSummary = useCallback(async (
     pageNo: number,
-    summaryText: string
+    summaryText: string,
+    forPages?: number[]
   ): Promise<void> => {
     console.log('💾 Saving summary for pdfFileId:', pdfFileId, 'pageNo:', pageNo);
     const dbRef = getSummariesRef();
-    
+
     // Query for existing summary for this pdfFileId
     const q = query(dbRef, orderByChild('pdfFileId'), equalTo(pdfFileId));
     const snapshot = await get(q);
@@ -76,7 +77,11 @@ export const useSummaries = (pdfFileId: string) => {
         // Update existing
         const [id] = existingEntry;
         console.log('✏️ Updating existing summary:', id);
-        await update(child(dbRef, id), { summary: summaryText });
+        const updateData: any = { summary: summaryText };
+        if (forPages) {
+          updateData.forPages = forPages;
+        }
+        await update(child(dbRef, id), updateData);
         return;
       }
     }
@@ -87,6 +92,7 @@ export const useSummaries = (pdfFileId: string) => {
       pdfFileId,
       summaryForPdfPageNo: pageNo,
       summary: summaryText,
+      forPages,
     };
     console.log('➕ Adding new summary with ID:', newRef.key, 'data:', summary);
     await set(newRef, summary);

@@ -17,8 +17,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useChats } from '../db/hooks/useChats';
 import type { Chat } from '../db/schema';
-import { getApp } from '@react-native-firebase/app';
-import { getAI, getGenerativeModel } from '@react-native-firebase/ai';
+import { useAI } from '../hooks/useAI';
+import type { ModelMessage } from 'ai';
 import RnPdfKing from 'rn-pdf-king';
 import { EnrichedMarkdownText, type MarkdownStyle } from 'react-native-enriched-markdown';
 import { useTheme } from '../theme/colors';
@@ -184,6 +184,7 @@ export const ChatOverlay: React.FC<ChatOverlayProps> = ({
 }) => {
   const { colors, isDark } = useTheme();
   const { messages, addMessage } = useChats(pdfId || '');
+  const { generateContent, createImageParts, createUserMessage, loading: aiLoading } = useAI();
   
   // Update markdown colors based on theme
   const themedAiMarkdownStyle: MarkdownStyle = useMemo(() => ({
@@ -211,6 +212,8 @@ export const ChatOverlay: React.FC<ChatOverlayProps> = ({
   const flashListRef = useRef<FlashListRef<Chat>>(null);
   const previousMessageCountRef = useRef(0);
   const [savedScrollOffset, setSavedScrollOffset] = useState<number | null>(null);
+
+  const isAiLoading = isLoading || aiLoading;
 
   const insets = useSafeAreaInsets();
   const keyboardLiftOffset = Platform.OS === 'ios' ? 40 : 16;
@@ -321,7 +324,7 @@ export const ChatOverlay: React.FC<ChatOverlayProps> = ({
       await addMessage('Human', query);
 
       // 2. Prepare images - use selectedPages if provided, otherwise use current page context
-      const pagesToCapture = selectedPages && selectedPages.length > 0 
+      const pagesToCapture = selectedPages && selectedPages.length > 0
         ? [...selectedPages]
         : (() => {
             const pages = [];
@@ -335,42 +338,25 @@ export const ChatOverlay: React.FC<ChatOverlayProps> = ({
         pagesToCapture.map((p) => RnPdfKing.getPageBitmapBase64(p))
       );
 
-      // 3. Prepare AI contents (with history)
-      const ai = getAI(getApp());
-      const model = getGenerativeModel(ai, { model: 'gemini-2.5-flash-lite' });
-
+      // 3. Prepare AI messages (with history)
       // Get last 10 messages for context
       const lastMessages = messages.slice(-10);
-      const history = lastMessages.map(m => ({
-        role: m.sender === 'Human' ? 'user' as const : 'model' as const,
-        parts: [{ text: m.messageText }]
-      }));
+      const historyMessages = lastMessages.map(m => ({
+        role: m.sender === 'Human' ? 'user' : 'assistant',
+        content: [{ type: 'text' as const, text: m.messageText }],
+      })) as ModelMessage[];
 
-      const contents = [
-        {
-          role: 'user' as const,
-          parts: [{ text: CHAT_USER_GUIDANCE_PROMPT }],
-        },
-        ...history,
-        {
-          role: 'user' as const,
-          parts: [
-            { text: query },
-            ...bitmaps.map((b) => ({
-              inlineData: {
-                data: b,
-                mimeType: 'image/png',
-              },
-            })),
-          ],
-        },
-      ];
+      const imageParts = createImageParts(bitmaps);
+      const userMessage = createUserMessage(query, imageParts);
 
-      const result = await model.generateContent({
+      const responseText = await generateContent({
         systemInstruction: CHAT_SYSTEM_PROMPT,
-        contents,
+        messages: [
+          { role: 'user', content: [{ type: 'text' as const, text: CHAT_USER_GUIDANCE_PROMPT }] } as ModelMessage,
+          ...historyMessages,
+          userMessage,
+        ],
       });
-      const responseText = result.response.text();
 
       // 4. Add AI response to DB with page references
       await addMessage('AI', responseText || "I couldn't generate a response.", undefined, pagesToCapture);
@@ -437,7 +423,7 @@ export const ChatOverlay: React.FC<ChatOverlayProps> = ({
               />
             </View>
 
-            {isLoading && (
+            {isAiLoading && (
               <View style={[styles.loadingContainer, { backgroundColor: colors.loading }]}>
                 <ActivityIndicator size="small" color={colors.primary} />
                 <Text style={[styles.loadingText, { color: colors.primary }]}>AI Tutor is analyzing pages...</Text>
@@ -464,7 +450,7 @@ export const ChatOverlay: React.FC<ChatOverlayProps> = ({
                 <TouchableOpacity
                   onPress={() => handleSend()}
                   style={[styles.sendButton, !inputText.trim() && { backgroundColor: colors.inputBorder }]}
-                  disabled={!inputText.trim() || isLoading}
+                  disabled={!inputText.trim() || isAiLoading}
                 >
                   <Ionicons name="arrow-up" size={24} color="#fff" />
                 </TouchableOpacity>

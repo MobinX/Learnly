@@ -11,6 +11,9 @@ import {
   Pressable,
   Linking,
   BackHandler,
+  Keyboard,
+  KeyboardEvent,
+  TextInput,
 } from "react-native";
 import { FAB, ActivityIndicator, Portal } from 'react-native-paper';
 import { useNavigation, useRouter } from "expo-router";
@@ -267,6 +270,12 @@ export default function ViewerPage() {
   // Chat scroll position memory
   const [chatScrollPosition, setChatScrollPosition] = useState<number | null>(null);
 
+  // Summary edit states
+  const [editingSummaryId, setEditingSummaryId] = useState<string | null>(null);
+  const [editInstruction, setEditInstruction] = useState('');
+  const [isRegeneratingSummary, setIsRegeneratingSummary] = useState(false);
+  const [summaryKeyboardHeight, setSummaryKeyboardHeight] = useState(0);
+
   const [highlightColor, setHighlightColor] = useState('rgba(0, 0, 255, 0.3)'); // Default to blue
   const [showColorPicker, setShowColorPicker] = useState(false);
 
@@ -277,7 +286,7 @@ export default function ViewerPage() {
   // Database hooks
   console.log('📄 Viewer: pdfId =', pdfId, 'fileName =', fileName);
   const { highlights, addHighlight, deleteHighlight } = useHighlights(pdfId || "");
-  const { summaries, addOrUpdateSummary } = useSummaries(pdfId || "");
+  const { summaries, addOrUpdateSummary, deleteSummary } = useSummaries(pdfId || "");
   const { quizs, addQuiz, deleteQuiz, updateQuizScore } = useQuizs(pdfId || "");
   const { generateSummary } = useGenerateSummary();
   const { generateQuiz } = useGenerateQuiz();
@@ -329,6 +338,26 @@ export default function ViewerPage() {
     return () => subscription.remove();
   }, [isSelectionMode]);
 
+  // Handle keyboard for summary editing
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const handleKeyboardShow = (event: any) => {
+      setSummaryKeyboardHeight(event.endCoordinates?.height ?? 0);
+    };
+
+    const handleKeyboardHide = () => setSummaryKeyboardHeight(0);
+
+    const showSub = Keyboard.addListener(showEvent, handleKeyboardShow);
+    const hideSub = Keyboard.addListener(hideEvent, handleKeyboardHide);
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
   // Initial setup and reset
   useEffect(() => {
     showHeader();
@@ -359,10 +388,18 @@ export default function ViewerPage() {
         let hasChanges = false;
 
         summaries.forEach(summary => {
-          // Check if this summary is already in viewerData
+          // Check if this summary is already in viewerData with the correct ID
           const exists = newData.some(item => item.type === 'custom' && item.id === summary.id);
+          
           if (!exists) {
-             // Insert it
+             // Check if there's a temporary summary page (with loading or temporary ID)
+             // that should be replaced by this permanent summary
+             const tempIndex = newData.findIndex(
+               item => item.type === 'custom' && 
+                       item.id.startsWith('summary-') && 
+                       !item.isLoading
+             );
+             
              const pageNo = summary.summaryForPdfPageNo;
              const insertIndex = newData.findIndex(item => item.type === 'pdf' && item.pageNo === pageNo);
              const newItem: ViewerItemType = {
@@ -372,10 +409,14 @@ export default function ViewerPage() {
                isLoading: false
              };
 
-             if (insertIndex !== -1) {
+             if (tempIndex !== -1) {
+               // Replace temporary page with permanent one
+               newData[tempIndex] = newItem;
+             } else if (insertIndex !== -1) {
+               // Insert at the correct position
                newData.splice(insertIndex, 0, newItem);
              } else {
-               // If page not found (maybe at end), append?
+               // If page not found (maybe at end), append
                newData.push(newItem);
              }
              hasChanges = true;
@@ -613,19 +654,86 @@ export default function ViewerPage() {
 
   const renderItem = useCallback(({ item, width }: { item: ViewerItemType; width: number }) => {
     if (item.type === 'custom') {
+      // Find the summary in the summaries array to get forPages
+      const summaryData = summaries.find(s => s.id === item.id);
+      const isEditing = editingSummaryId === item.id;
+      
       return (
         <View style={[styles.pageWrapper, { width, minHeight: width, padding: 20 }]}>
+          {/* Summary Action Buttons */}
+          {!isEditing && !item.isLoading && (
+            <View style={styles.summaryActions}>
+              <TouchableOpacity
+                style={[styles.summaryActionButton, { backgroundColor: colors.error }]}
+                onPress={() => handleDeleteSummary(item.id, summaryData?.summaryForPdfPageNo || 0)}
+              >
+                <Ionicons name="trash-outline" size={18} color="#fff" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.summaryActionButton, { backgroundColor: colors.primary }]}
+                onPress={() => setEditingSummaryId(item.id)}
+              >
+                <Ionicons name="create-outline" size={18} color="#fff" />
+              </TouchableOpacity>
+            </View>
+          )}
+          
           {item.isLoading ? (
             <SkeletonLoader />
           ) : (
-            <View style={[styles.summaryMarkdownContainer, { backgroundColor: '#FFFFFF', padding: 20 }]}>
-              <EnrichedMarkdownText
-                flavor="github"
-                markdown={item.text || ""}
-                markdownStyle={themedSummaryMarkdownStyle}
-                onLinkPress={handleMarkdownLinkPress}
-              />
-            </View>
+            <>
+              <View style={[styles.summaryMarkdownContainer, { backgroundColor: '#FFFFFF', padding: 20 }]}>
+                <EnrichedMarkdownText
+                  flavor="github"
+                  markdown={item.text || ""}
+                  markdownStyle={themedSummaryMarkdownStyle}
+                  onLinkPress={handleMarkdownLinkPress}
+                />
+              </View>
+              
+              {/* Edit Input */}
+              {isEditing && (
+                <View style={[styles.editInstructionContainer, { backgroundColor: colors.surface }]}>
+                  <TextInput
+                    style={[styles.editInstructionInput, { 
+                      backgroundColor: colors.inputBackground, 
+                      borderColor: colors.inputBorder,
+                      color: colors.text 
+                    }]}
+                    placeholder="Add instructions (e.g., 'Focus on formulas', 'Make it shorter')..."
+                    placeholderTextColor={colors.textTertiary}
+                    value={editInstruction}
+                    onChangeText={setEditInstruction}
+                    multiline
+                    autoFocus
+                  />
+                  <TouchableOpacity
+                    style={[styles.editSendButton, { backgroundColor: colors.primary }]}
+                    onPress={() => {
+                      console.log('✏️ Inline edit send pressed for:', item.id);
+                      handleRegenerateSummary(
+                        item.id,
+                        summaryData?.summaryForPdfPageNo || 0,
+                        item.text,
+                        summaryData?.forPages
+                      );
+                    }}
+                  >
+                    <Ionicons name="send" size={20} color="#fff" />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.editCancelButton, { backgroundColor: colors.surfaceSecondary }]}
+                    onPress={() => {
+                      console.log('✏️ Edit cancelled for:', item.id);
+                      setEditingSummaryId(null);
+                      setEditInstruction('');
+                    }}
+                  >
+                    <Ionicons name="close" size={20} color={colors.text} />
+                  </TouchableOpacity>
+                </View>
+              )}
+            </>
           )}
           <Text style={styles.pageLabel}>Summary Page</Text>
         </View>
@@ -703,19 +811,17 @@ export default function ViewerPage() {
         sortedPages.map(page => RnPdfKing.getPageBitmapBase64(page))
       );
 
-      let finalSummary = "";
+      // Show loading state
+      setViewerData(prev => prev.map(item =>
+        (item.type === 'custom' && item.id === newPageId)
+          ? { ...item, text: 'Generating summary...', isLoading: true }
+          : item
+      ));
 
-      // Generate summary with streaming
-      await generateSummary(bitmaps, (text) => {
-        finalSummary = text;
-        setViewerData(prev => prev.map(item =>
-          (item.type === 'custom' && item.id === newPageId)
-            ? { ...item, text: text }
-            : item
-        ));
-      });
+      // Generate summary (non-streaming)
+      const finalSummary = await generateSummary(bitmaps);
 
-      // Final update to remove loading state
+      // Update with final summary
       setViewerData(prev => prev.map(item =>
           (item.type === 'custom' && item.id === newPageId)
             ? { ...item, text: finalSummary, isLoading: false }
@@ -725,6 +831,8 @@ export default function ViewerPage() {
       // Save to DB
       if (pdfId) {
         await addOrUpdateSummary(firstPage, finalSummary);
+        // The summary will be added to viewerData by the useEffect watching summaries
+        // No need to manually remove the temporary page as it will be replaced
       }
 
     } catch (error) {
@@ -735,6 +843,100 @@ export default function ViewerPage() {
       setViewerData(prev => prev.filter(item =>
         !(item.type === 'custom' && item.id === newPageId)
       ));
+    }
+  };
+
+  const handleDeleteSummary = (summaryId: string, summaryPageNo: number) => {
+    Alert.alert(
+      "Delete Summary",
+      "Are you sure you want to delete this summary?",
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            await deleteSummary(summaryId);
+            // Remove from viewer data
+            setViewerData(prev => prev.filter(item => (item as any).id !== summaryId));
+          },
+        },
+      ]
+    );
+  };
+
+  const handleRegenerateSummary = async (
+    summaryId: string,
+    summaryPageNo: number,
+    currentSummaryText: string,
+    forPages?: number[]
+  ) => {
+    // Always allow regeneration - use existing pages if no forPages specified
+    const pagesToUse = forPages && forPages.length > 0 
+      ? forPages 
+      : [summaryPageNo];
+
+    setIsRegeneratingSummary(true);
+    setEditingSummaryId(summaryId);
+
+    console.log('🔄 Starting summary regeneration for:', summaryId, 'pages:', pagesToUse);
+
+    // Set summary to loading state
+    setViewerData(prev => prev.map(item =>
+      (item as any).id === summaryId
+        ? { ...item, text: '', isLoading: true }
+        : item
+    ));
+
+    try {
+      // Fetch bitmaps
+      console.log('📸 Fetching bitmaps for pages:', pagesToUse);
+      const bitmaps = await Promise.all(
+        pagesToUse.map(page => RnPdfKing.getPageBitmapBase64(page))
+      );
+      console.log('✅ Bitmaps fetched:', bitmaps.length);
+
+      // Show loading state
+      setViewerData(prev => prev.map(item =>
+        (item as any).id === summaryId
+          ? { ...item, text: 'Regenerating summary...', isLoading: true }
+          : item
+      ));
+
+      // Generate new summary with user's instruction (non-streaming)
+      console.log('🤖 Generating summary with instruction:', editInstruction.trim());
+      const finalSummary = await generateSummary(bitmaps, editInstruction.trim() || undefined);
+      console.log('✅ Summary generated, length:', finalSummary.length);
+
+      // Update in DB
+      await addOrUpdateSummary(summaryPageNo, finalSummary, pagesToUse);
+      console.log('✅ Summary saved to DB');
+
+      // Update viewerData to remove loading state and show new summary
+      setViewerData(prev => prev.map(item =>
+        (item as any).id === summaryId
+          ? { ...item, text: finalSummary, isLoading: false }
+          : item
+      ));
+
+      // Reset state
+      setEditInstruction('');
+      setEditingSummaryId(null);
+      setIsRegeneratingSummary(false);
+
+    } catch (error: any) {
+      console.error("❌ Error regenerating summary:", error);
+      Alert.alert("Error", "Failed to regenerate summary: " + error.message);
+      // Restore previous text on error
+      setViewerData(prev => prev.map(item =>
+        (item as any).id === summaryId
+          ? { ...item, text: currentSummaryText, isLoading: false }
+          : item
+      ));
+      setIsRegeneratingSummary(false);
     }
   };
 
@@ -1084,6 +1286,75 @@ export default function ViewerPage() {
           setIsQuizOpen(true);
         }}
       />
+
+      {/* Summary Edit Input Bar (at bottom when editing) */}
+      {editingSummaryId && (
+        <View style={[
+          styles.summaryEditBar,
+          { 
+            paddingBottom: summaryKeyboardHeight > 0 ? summaryKeyboardHeight + 16 : Math.max(insets.bottom, 16),
+            backgroundColor: colors.surface,
+            borderTopColor: colors.border,
+          }
+        ]}>
+          <View style={[styles.summaryEditInputWrapper, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder }]}>
+            <TextInput
+              style={[styles.summaryEditInput, { color: colors.text }]}
+              placeholder="Add instructions for regenerating summary..."
+              placeholderTextColor={colors.textTertiary}
+              value={editInstruction}
+              onChangeText={setEditInstruction}
+              multiline
+              onSubmitEditing={() => {
+                // Find the summary being edited and regenerate
+                const summaryData = summaries.find(s => s.id === editingSummaryId);
+                if (summaryData) {
+                  const viewerItem = viewerData.find(item => (item as any).id === editingSummaryId);
+                  if (viewerItem && viewerItem.type === 'custom') {
+                    handleRegenerateSummary(
+                      editingSummaryId,
+                      summaryData.summaryForPdfPageNo,
+                      viewerItem.text,
+                      summaryData.forPages
+                    );
+                  }
+                }
+              }}
+            />
+            <TouchableOpacity
+              onPress={() => {
+                console.log('📍 Bottom bar send pressed for:', editingSummaryId);
+                // Find the summary being edited and regenerate
+                const summaryData = summaries.find(s => s.id === editingSummaryId);
+                if (summaryData) {
+                  const viewerItem = viewerData.find(item => (item as any).id === editingSummaryId);
+                  if (viewerItem && viewerItem.type === 'custom') {
+                    console.log('📝 Found summary, regenerating...');
+                    handleRegenerateSummary(
+                      editingSummaryId,
+                      summaryData.summaryForPdfPageNo,
+                      viewerItem.text,
+                      summaryData.forPages
+                    );
+                  } else {
+                    console.error('❌ Viewer item not found or not custom type');
+                  }
+                } else {
+                  console.error('❌ Summary data not found for:', editingSummaryId);
+                }
+              }}
+              style={[styles.summaryEditSendButton, !editInstruction.trim() && { backgroundColor: colors.inputBorder }]}
+              disabled={!editInstruction.trim() || isRegeneratingSummary}
+            >
+              {isRegeneratingSummary ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Ionicons name="arrow-up" size={20} color="#fff" />
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -1237,5 +1508,84 @@ const styles = StyleSheet.create({
   closeButtonText: {
     color: 'white',
     fontWeight: '600',
+  },
+  summaryActions: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  summaryActionButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  editInstructionContainer: {
+    marginTop: 16,
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    gap: 12,
+  },
+  editInstructionInput: {
+    flex: 1,
+    minHeight: 60,
+    maxHeight: 120,
+    fontSize: 15,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  editSendButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    alignSelf: 'flex-end',
+  },
+  editCancelButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    alignSelf: 'flex-end',
+  },
+  summaryEditBar: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    borderTopWidth: 1,
+  },
+  summaryEditInputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    borderRadius: 24,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+  },
+  summaryEditInput: {
+    flex: 1,
+    maxHeight: 120,
+    fontSize: 16,
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    paddingBottom: 8,
+  },
+  summaryEditSendButton: {
+    backgroundColor: '#007AFF',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 2,
   },
 });

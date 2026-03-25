@@ -1,6 +1,5 @@
-import { useState, useCallback } from 'react';
-import { getApp } from '@react-native-firebase/app';
-import { getAI, getGenerativeModel } from '@react-native-firebase/ai';
+import { useCallback } from 'react';
+import { useAI } from './useAI';
 
 const SUMMARY_SYSTEM_PROMPT = `You are Learnly's elite study-note generator.
 
@@ -29,58 +28,33 @@ Please include:
 - Main concepts
 - Important formulas (with LaTeX)
 - Worked reasoning steps when relevant
-- Key takeaways for quick revision`;
+- Key takeaways for quick revision
+
+{additionalInstruction}`;
 
 export const useGenerateSummary = () => {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
+  const { generateContent, createImageParts, createUserMessage, loading, error } = useAI();
 
   const generateSummary = useCallback(async (
     base64Images: string[],
-    onStreamUpdate: (text: string) => void
-  ) => {
-    setLoading(true);
-    setError(null);
-    let fullText = '';
+    additionalInstruction?: string
+  ): Promise<string> => {
+    const userPrompt = SUMMARY_USER_PROMPT.replace(
+      '{additionalInstruction}',
+      additionalInstruction
+        ? `Additional instructions: ${additionalInstruction}`
+        : ''
+    );
 
-    try {
-      const app = getApp();
-      const ai = getAI(app);
-      const model = getGenerativeModel(ai, { model: 'gemini-2.5-flash-lite' });
+    const imageParts = createImageParts(base64Images);
+    const userMessage = createUserMessage(userPrompt, imageParts);
 
-      const result = await model.generateContentStream({
-        systemInstruction: SUMMARY_SYSTEM_PROMPT,
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              { text: SUMMARY_USER_PROMPT },
-              ...base64Images.map(b64 => ({
-                inlineData: {
-                  mimeType: 'image/png',
-                  data: b64,
-                },
-              })),
-            ],
-          },
-        ],
-      });
-
-      for await (const chunk of result.stream) {
-        const chunkText = chunk.text();
-        fullText += chunkText;
-        onStreamUpdate(fullText);
-      }
-
-    } catch (e: any) {
-      console.error("Error generating summary:", e);
-      setError(e);
-      throw e;
-    } finally {
-      setLoading(false);
-    }
-    return fullText;
-  }, []);
+    // Use non-streaming for simple text generation
+    return await generateContent({
+      systemInstruction: SUMMARY_SYSTEM_PROMPT,
+      messages: [userMessage],
+    });
+  }, [generateContent, createImageParts, createUserMessage]);
 
   return { generateSummary, loading, error };
 };

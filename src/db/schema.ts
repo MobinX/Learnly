@@ -34,6 +34,7 @@ export interface SummaryVirtualPage {
   pdfFileId: string;
   summaryForPdfPageNo: number;
   summary: string;
+  forPages?: number[]; // Pages used to generate this summary (optional for backward compatibility)
 }
 
 export interface QuizQuestion {
