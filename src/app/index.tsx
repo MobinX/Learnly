@@ -46,8 +46,8 @@ export default function IndexPage() {
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={[styles.card, { backgroundColor: colors.surface, shadowColor: colors.text }]}>
-        <Text style={[styles.title, { color: colors.text }]}>PDF King</Text>
-        <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Select a PDF to get started</Text>
+        <Text style={[styles.title, { color: colors.text }]}>Learnly</Text>
+        <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Select a PDF to Get Started</Text>
         <Button title="PDF File" onPress={handlePickFile} color={colors.primary} />
         <View style={{height: 10}} />
         {error && <Text style={[styles.error, { color: colors.error }]}>{error}</Text>}

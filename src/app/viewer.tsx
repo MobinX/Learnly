@@ -322,7 +322,7 @@ export default function ViewerPage() {
     resetInactivityTimer();
   }, [headerOpacity, resetInactivityTimer]);
 
-  // Handle back button when selection mode is active
+  // Handle back button when selection mode is active or editing summary
   useEffect(() => {
     const onBackPress = () => {
       if (isSelectionMode) {
@@ -331,12 +331,19 @@ export default function ViewerPage() {
         setSelectedPages([]);
         return true; // Prevent default back behavior
       }
+      if (editingSummaryId) {
+        // Exit edit mode instead of going back
+        console.log('🔙 Back pressed while editing, closing edit box');
+        setEditingSummaryId(null);
+        setEditInstruction('');
+        return true; // Prevent default back behavior
+      }
       return false; // Allow default back behavior
     };
 
     const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
     return () => subscription.remove();
-  }, [isSelectionMode]);
+  }, [isSelectionMode, editingSummaryId]);
 
   // Handle keyboard for summary editing
   useEffect(() => {
@@ -344,7 +351,7 @@ export default function ViewerPage() {
     const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
 
     const handleKeyboardShow = (event: any) => {
-      setSummaryKeyboardHeight(event.endCoordinates?.height ?? 0);
+      setSummaryKeyboardHeight(event.endCoordinates?.height ? event.endCoordinates.height + 20 : 0);
     };
 
     const handleKeyboardHide = () => setSummaryKeyboardHeight(0);
@@ -921,11 +928,13 @@ export default function ViewerPage() {
           ? { ...item, text: finalSummary, isLoading: false }
           : item
       ));
+      console.log('✅ ViewerData updated, isLoading set to false');
 
       // Reset state
       setEditInstruction('');
       setEditingSummaryId(null);
       setIsRegeneratingSummary(false);
+      console.log('✅ Edit mode closed, editingSummaryId set to null');
 
     } catch (error: any) {
       console.error("❌ Error regenerating summary:", error);
@@ -936,7 +945,11 @@ export default function ViewerPage() {
           ? { ...item, text: currentSummaryText, isLoading: false }
           : item
       ));
+      // Reset state on error too
+      setEditInstruction('');
+      setEditingSummaryId(null);
       setIsRegeneratingSummary(false);
+      console.log('✅ Error handler: Edit mode closed');
     }
   };
 
