@@ -1,6 +1,7 @@
 {
   "project_info": {
     "project_number": "58399230776",
+    "firebase_url": "https://learnly-0-default-rtdb.firebaseio.com",
     "project_id": "learnly-0",
     "storage_bucket": "learnly-0.firebasestorage.app"
   },
@@ -13,6 +14,30 @@
         }
       },
       "oauth_client": [
+        {
+          "client_id": "58399230776-c36633iriaoev601krgd47k8bl7u9dp7.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.anonymous.Learnly",
+            "certificate_hash": "8a09bcd00d1bb51fcae3739f9077eccfa5123775"
+          }
+        },
+        {
+          "client_id": "58399230776-rr5k0msv5hvkrcuqojhqnl5uaccs0t4c.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.anonymous.Learnly",
+            "certificate_hash": "5e8f16062ea3cd2c4a0d547876baa6f38cabf625"
+          }
+        },
+        {
+          "client_id": "58399230776-thmuf4jbabncbra928i6ct1t86v8fqsr.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.anonymous.Learnly",
+            "certificate_hash": "af1a980b18944c6d454a5bfbbecbf6ddd5fdc1ec"
+          }
+        },
         {
           "client_id": "58399230776-bsfp3ilm78p2b984k3m5p29587rp0qa3.apps.googleusercontent.com",
           "client_type": 3

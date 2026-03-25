@@ -7,6 +7,12 @@ import { DatabaseProvider } from '../db';
 import { PaperProvider, Portal, Modal, ActivityIndicator, Snackbar, Button } from 'react-native-paper';
 import { useColorScheme, View, Text, StyleSheet } from 'react-native';
 import * as Updates from 'expo-updates';
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
+
+// Configure Google Sign-In with the web client ID from google-services.json
+GoogleSignin.configure({
+  webClientId: '58399230776-bsfp3ilm78p2b984k3m5p29587rp0qa3.apps.googleusercontent.com',
+});
 
 export default function RootLayout() {
   const pathname = usePathname();

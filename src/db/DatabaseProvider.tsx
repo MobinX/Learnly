@@ -1,5 +1,5 @@
-import React, { createContext, useContext, ReactNode, useEffect } from 'react';
-import { FirebaseDatabaseProvider, useFirebaseDatabase } from './FirebaseDatabaseProvider';
+import React, { createContext, useContext, ReactNode, useMemo } from 'react';
+import { FirebaseDatabaseProvider } from './FirebaseDatabaseProvider';
 import { useAuth } from '../auth/useAuth';
 
 interface DatabaseContextType {
@@ -10,23 +10,28 @@ const DatabaseContext = createContext<DatabaseContextType | null>(null);
 
 export const useAppDatabase = () => {
   const context = useContext(DatabaseContext);
+  return context;
+};
+
+export const useRequireAppDatabase = () => {
+  const context = useContext(DatabaseContext);
   if (!context) {
-    throw new Error('useAppDatabase must be used within a DatabaseProvider');
+    throw new Error('useRequireAppDatabase must be used within a DatabaseProvider with an authenticated user');
   }
   return context;
 };
 
 export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
-  const { user, loading, signInAnonymously } = useAuth();
+  const { user, loading } = useAuth();
 
-  useEffect(() => {
-    if (!loading && !user) {
-      signInAnonymously();
-    }
-  }, [loading, user, signInAnonymously]);
-
+  // Always render children, even without a user
+  // Database context will be null until user signs in
   if (loading || !user) {
-    return null;
+    return (
+      <DatabaseContext.Provider value={null}>
+        {children}
+      </DatabaseContext.Provider>
+    );
   }
 
   return (
